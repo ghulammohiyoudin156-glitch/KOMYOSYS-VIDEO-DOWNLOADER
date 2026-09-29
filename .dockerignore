@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.gitignore
+bin
+cookies
+.env.local
+.env.local.example
+*.log
+Dockerfile
+.dockerignore
+README.md

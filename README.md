@@ -93,6 +93,39 @@ progress shimmer, hover lifts) is switched off under
   Nothing is bypassed: private accounts, DRM and region locks stay as they are.
 * Photo slidehows have no video track and are reported as such.
 
+## Hosting it online
+
+A download is a `yt-dlp` process writing a file to disk, so the host has to allow
+child processes and a real filesystem. Check any URL with `GET /api/health`:
+`"ok": true` means it can serve downloads, `"ok": false` means the engine is not
+there and every link will fail with "the downloader engine is missing".
+
+**Vercel can host the site but not the downloads.** Its build succeeds (the
+bootstrap scripts swallow errors and exit 0), yet a serverless function cannot
+spawn `bin/yt-dlp`, so `/api/health` reports `ok: false` there for every platform,
+YouTube included. Keep Vercel for the UI or move the whole app:
+
+```bash
+docker build -t komyosys-downloader .
+docker run --rm -p 3000:3000 komyosys-downloader   # then open /api/health
+```
+
+That image is the deploy target for any persistent container host - Render,
+Railway, Fly.io, or a plain VPS all build it as-is, read the injected `PORT`, and
+run `next start` on `0.0.0.0`. The Dockerfile installs ffmpeg from apt (the code
+honours a system ffmpeg on `PATH`) and lets `npm install` fetch the matching Linux
+`yt-dlp` into `bin/`, so nothing Windows-specific from this machine is baked in.
+
+Set the same variables as `.env.local` in the host's dashboard. For
+`TIKTOK_COOKIES_FILE`, mount the file rather than committing it, e.g.
+`docker run -v ./cookies:/app/cookies:ro -e TIKTOK_COOKIES_FILE=/app/cookies/tiktok.txt …`.
+Jobs live in memory and files land on local disk, so use one instance - a
+load-balanced autoscale would lose jobs between requests.
+
+Heads-up on where you download *from*: TikTok usually refuses datacenter IP ranges,
+so a cloud-hosted app often reports the "TikTok may be refusing this network"
+message where the same link succeeds on your home connection.
+
 ## Responsible use
 
 Only save videos you own or have permission to save. This tool does not bypass
