@@ -1,8 +1,9 @@
 import Downloader from '../components/Downloader';
+import HistoryPanel from '../components/HistoryPanel';
 
 export const metadata = {
   title: 'KOMYOSYS Video Downloader',
-  description: 'Check public Facebook and Instagram links for authorized access.',
+  description: 'Turn public YouTube, TikTok, Instagram, and Facebook video links into a downloadable file, with a private history of what you saved.',
 };
 
 export default function Home() {
@@ -20,8 +21,9 @@ export default function Home() {
         <div className="hero-copy">
           <p className="eyebrow">Public media, prepared simply</p>
           <h1 id="page-title" className="hero-title">Your link.<br /><em>Your file.</em><br />No friction.</h1>
-          <p className="hero-description">A focused way to prepare videos you are allowed to save from public Instagram and Facebook links.</p>
+          <p className="hero-description">A focused way to prepare videos you are allowed to save from public YouTube, TikTok, Instagram, and Facebook links.</p>
           <div className="signal-row" aria-label="Service principles">
+            <span className="signal">YouTube + TikTok + IG + FB</span>
             <span className="signal">Public links</span>
             <span className="signal">MP4 preferred</span>
             <span className="signal">No login bypass</span>
@@ -29,6 +31,8 @@ export default function Home() {
         </div>
         <Downloader />
       </section>
+
+      <HistoryPanel />
 
       <footer className="site-footer">
         <p><strong>KOMYOSYS</strong> · Media utility for authorized downloads.</p>
