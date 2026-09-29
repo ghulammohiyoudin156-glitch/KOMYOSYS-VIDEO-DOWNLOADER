@@ -1,0 +1,66 @@
+#################################################################
+# Render Blueprint - https://render.com/docs/blueprint-spec
+#
+# Why this file exists: downloads shell out to yt-dlp (and ffmpeg for
+# muxing), which Vercel's serverless runtime cannot do. Render builds the
+# repo's Dockerfile, so both binaries land inside the container and
+# downloads actually run.
+#
+# One-click: push this repo to GitHub, then in Render choose
+# "New > Blueprint" and point it at the repo. Render reads this file.
+#################################################################
+
+services:
+  - type: web
+    name: komyosys-video-downloader
+    # runtime: docker makes Render ignore buildCommand/startCommand and use
+    # the Dockerfile at the repo root, which installs ffmpeg via apt and
+    # lets postinstall drop the Linux yt-dlp binary into bin/.
+    runtime: docker
+
+    # Keep this at 1. A download is a long-lived child process, so scaling
+    # out is fine but scaling in never helps, and cookie/queue state is
+    # per-process.
+    numInstances: 1
+
+    # Health check reads /api/health, which reports which engines the running
+    # container found. It always answers 200 while the app is up, so a bad
+    # engine shows up in the JSON (ok:false) rather than as a failed deploy.
+    healthCheckPath: /api/health
+
+    # Region is commented out so the Blueprint always syncs. Uncomment the
+    # closest one - Singapore is the fastest for South Asia.
+    # region: singapore
+    # region: ohio
+    # region: oregon
+
+    # plan is omitted on purpose: the default is 0.5c-512mb, and a paid tier
+    # is recommended for real use because 500 MB downloads need the RAM and
+    # the extra ephemeral disk. See "Hosting it online" in README.md.
+    # plan: 1c-2g
+
+    envVars:
+      # Hard cap on the height of the video we ask each engine for, so a
+      # 4K request cannot exhaust the container's ephemeral disk.
+      - key: TIKTOK_MAX_HEIGHT
+        value: "1080"
+      - key: YOUTUBE_MAX_HEIGHT
+        value: "1080"
+
+      # Optional: private TikTok links need a logged-in session. Paste the
+      # path of a cookies.txt inside the container here (for example
+      # /tmp/tiktok-cookies.txt) in the Render dashboard. sync:false means
+      # Render prompts for it instead of storing a value in Git.
+      - key: TIKTOK_COOKIES_FILE
+        sync: false
+
+      # Optional Instagram/Facebook support. All four are prompts, never
+      # committed values. Leave them empty and the feature stays disabled.
+      - key: INSTAGRAM_USER_ID
+        sync: false
+      - key: INSTAGRAM_ACCESS_TOKEN
+        sync: false
+      - key: FACEBOOK_PAGE_ID
+        sync: false
+      - key: FACEBOOK_PAGE_ACCESS_TOKEN
+        sync: false

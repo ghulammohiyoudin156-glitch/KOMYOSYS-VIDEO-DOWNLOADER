@@ -9,4 +9,6 @@ cookies
 *.log
 Dockerfile
 .dockerignore
+render.yaml
+fly.toml
 README.md

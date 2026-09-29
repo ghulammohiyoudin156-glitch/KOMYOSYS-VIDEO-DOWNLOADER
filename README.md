@@ -110,11 +110,27 @@ docker build -t komyosys-downloader .
 docker run --rm -p 3000:3000 komyosys-downloader   # then open /api/health
 ```
 
-That image is the deploy target for any persistent container host - Render,
-Railway, Fly.io, or a plain VPS all build it as-is, read the injected `PORT`, and
-run `next start` on `0.0.0.0`. The Dockerfile installs ffmpeg from apt (the code
+That image is the deploy target for any persistent container host, and two hosts
+are pre-wired in this repo so there is nothing to configure:
+
+- **Render** - New > Blueprint on this repo. `render.yaml` selects the Dockerfile,
+  pins one instance, uses `/api/health` as the health check, and prompts for the
+  optional cookies/Meta secrets instead of storing them in Git.
+- **Fly.io** - `fly launch` then `fly deploy`. `fly.toml` builds the same
+  Dockerfile, pins the port to 3000 on both sides of the proxy, and checks
+  `/api/health`.
+- **Railway, a VPS, anywhere else** - build the image, or run
+  `npm ci && npm run build && npm start` on a machine that has `ffmpeg` available.
+
+Each of them builds the image as-is, reads the injected `PORT`, and runs
+`next start` on `0.0.0.0`. The Dockerfile installs ffmpeg from apt (the code
 honours a system ffmpeg on `PATH`) and lets `npm install` fetch the matching Linux
 `yt-dlp` into `bin/`, so nothing Windows-specific from this machine is baked in.
+
+Free tiers that suspend an idle instance are fine for trying this out, but they
+add a cold start to the first link after a quiet period, and the smallest tiers
+have little disk - a 1080p file plus its audio track can briefly need a few
+hundred MB while ffmpeg muxes them.
 
 Set the same variables as `.env.local` in the host's dashboard. For
 `TIKTOK_COOKIES_FILE`, mount the file rather than committing it, e.g.
