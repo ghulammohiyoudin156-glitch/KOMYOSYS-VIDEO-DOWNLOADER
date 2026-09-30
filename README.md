@@ -10,6 +10,24 @@ npm install     # downloads yt-dlp + ffmpeg into bin/
 npm run dev     # http://localhost:3000
 ```
 
+## Hosting it: why Vercel alone does not download
+
+The download engine is a real `yt-dlp` process (plus ffmpeg for muxing). Vercel's
+serverless runtime cannot run those child processes and never ships `bin/` inside a
+function bundle, so on Vercel:
+
+* `GET /api/health` returns `"ok": false` with `"ytdlp": false`
+* `POST /api/download` returns **HTTP 503** with
+  *"Vercel cannot reliably run download jobs directly..."*
+
+The homepage still loads fine, which is why the site looks healthy while every
+download fails. **Deploy the whole app to a container host (Render, Fly.io, or any
+VPS) - that is where downloads actually work.** See "Hosting it online" below; the
+shortest path is Render's Blueprint, since `render.yaml` is already in the repo.
+
+If you keep the UI on Vercel, deploy the app to Render first, then point Vercel at
+it with `DOWNLOADER_BACKEND_URL`, and Vercel forwards the job to Render instead.
+
 `npm install` runs `scripts/get-ytdlp.js` and `scripts/get-ffmpeg.js`, which
 place `bin/yt-dlp.exe` and `bin/ffmpeg.exe` (`yt-dlp` / `ffmpeg` on
 Linux/macOS) for the server to call. If those downloads are blocked, run either
