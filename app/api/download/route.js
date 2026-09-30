@@ -193,6 +193,19 @@ const isAllowedUrl = (value) => {
   }
 };
 
+// A download is a yt-dlp child process plus a temp file, so the host can only carry a
+// handful at a time. Without this ceiling a handful of parallel requests (or one tab
+// left open hitting "Prepare download" repeatedly) starts dozens of processes and the
+// server runs out of memory, which takes down every other job with it.
+const MAX_ACTIVE_JOBS = 3;
+const activeJobCount = () => {
+  let count = 0;
+  for (const job of downloadJobs.values()) {
+    if (job.status !== 'ready' && job.status !== 'error') count += 1;
+  }
+  return count;
+};
+
 const detectPlatform = (value) =>
   Object.keys(PLATFORM_PATTERNS).find((platform) => PLATFORM_PATTERNS[platform].test(value)) || null;
 
@@ -256,6 +269,8 @@ const videoFormat = (platform, ffmpegAvailable) => {
 };
 
 // Turns `My Title [dQw4w9WgXcQ].mp4` into `My Title.mp4` for a readable label in the UI.
+// The `[id]` block is only stripped when it really sits directly before the extension;
+// a title that legitimately contains brackets keeps them instead of being mangled.
 const displayTitle = (filename) => filename.replace(/\s*\[[^\]]*\](?=\.[^.]+$)/, '');
 
 // Runs yt-dlp as a child process so stdout can be watched for progress lines.
@@ -395,6 +410,13 @@ export async function POST(request) {
       return NextResponse.json(
         { success: false, error: 'Invalid URL. Please provide a valid YouTube, TikTok, Facebook, or Instagram video URL.' },
         { status: 400 }
+      );
+    }
+
+    if (activeJobCount() >= MAX_ACTIVE_JOBS) {
+      return NextResponse.json(
+        { success: false, error: 'The server is already preparing other videos. Please wait for one to finish, then try again.' },
+        { status: 429 }
       );
     }
 
@@ -641,10 +663,23 @@ export async function GET(request) {
     return new NextResponse('This download has expired. Please submit the link again.', { status: 404 });
   }
 
-  readyDownloads.delete(token);
   const filePath = path.join(item.directory, item.file);
+  const saved = await fs.stat(filePath).catch(() => null);
+  if (!saved) {
+    // The temp directory was reaped already, so nothing can be served from it.
+    readyDownloads.delete(token);
+    await fs.rm(item.directory, { recursive: true, force: true });
+    return new NextResponse('This download has expired. Please submit the link again.', { status: 404 });
+  }
+
   const stream = createReadStream(filePath);
-  stream.on('close', () => fs.rm(item.directory, { recursive: true, force: true }));
+  // The token is NOT spent when the read finishes. `createReadStream` emits 'end' as
+  // soon as the file has been pulled into memory, which for anything but a very large
+  // file happens in milliseconds - long before the bytes reach the browser. Deleting
+  // the token there meant that one dropped tunnel/Wi-Fi/mobile connection destroyed
+  // the file and the user could never finish saving it. Instead the entry stays in
+  // readyDownloads and the 10 minute TTL set when the job finished reclaims it, so a
+  // reload or a retried click gets the whole file again.
   const safeFilename = item.file.replace(/[\x00-\x1F\x7F"\\]/g, '_');
   const asciiFilename = safeFilename.replace(/[^\x20-\x7E]/g, '_');
   const contentTypes = {
@@ -659,6 +694,9 @@ export async function GET(request) {
   return new NextResponse(Readable.toWeb(stream), {
     headers: {
       'Content-Type': contentType,
+      // Without a length the browser cannot show a real progress bar for the save, and
+      // some proxies hold the response open instead of streaming it through.
+      'Content-Length': String(saved.size),
       'Content-Disposition': `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(safeFilename)}`,
     },
   });

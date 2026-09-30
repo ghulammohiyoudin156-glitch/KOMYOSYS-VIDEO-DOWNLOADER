@@ -100,41 +100,70 @@ export default function Downloader() {
   };
 
   // Asks the API for the live job percentage every 700ms until it finishes.
+  // A progress check is a tiny request, so on a tunnel, phone network or a cold host
+  // it can fail for reasons that have nothing to do with the download (a 408, a 502
+  // from the proxy, one dropped Wi-Fi packet). Treating the first hiccup as a failed
+  // download threw away a job that was still running fine on the server, so a real
+  // server verdict is separated from a transient network error and only the former
+  // ends the wait.
+  const TRANSIENT_POLL_FAILURES = 5;
   const pollJob = (jobId) => {
     stopPolling();
+    let misses = 0;
     const tick = async () => {
+      let response;
+      let data;
       try {
-        const response = await fetch(`/api/download?job=${encodeURIComponent(jobId)}`);
-        const data = await response.json();
-        if (!response.ok || !data.success) throw new Error(data.error || 'The progress check failed.');
-        if (data.status === 'ready' && data.result) { showReady(data.result); return; }
-        if (data.status === 'error') {
-          stopPolling();
-          setProgress(null);
-          setStatus('error');
-          setMessage(data.error || 'This video is not available for direct download.');
-          setResources(data.resources || []);
+        response = await fetch(`/api/download?job=${encodeURIComponent(jobId)}`);
+        data = await response.json();
+      } catch {
+        misses += 1;
+        if (misses < TRANSIENT_POLL_FAILURES) {
+          setProgress((previous) => ({ ...previous, stage: 'Reconnecting to the server...' }));
+          pollRef.current = setTimeout(tick, 1500);
           return;
         }
-        setProgress((previous) => ({
-          // The info request has no percentage to report yet, so creep a little
-          // (capped) to show the user the job is alive.
-          percent: data.status === 'fetching-info'
-            ? Math.min(9, (previous?.percent || 0) + 1)
-            : Number(data.percent) || 0,
-          stage: data.stage,
-          downloaded: data.downloaded,
-          total: data.total,
-          speed: data.speed,
-          eta: data.eta,
-        }));
-        pollRef.current = setTimeout(tick, 700);
-      } catch (error) {
         stopPolling();
         setProgress(null);
         setStatus('error');
-        setMessage(error.message || 'An error occurred. Please try again.');
+        setMessage('Lost the connection to the server while the download was running. The link may still finish on the host - please try again.');
+        return;
       }
+
+      if (!response.ok || !data.success) {
+        // "This download no longer exists" is a real answer from the server, not a
+        // dropped request, so there is nothing to retry there.
+        stopPolling();
+        setProgress(null);
+        setStatus('error');
+        setMessage(data.error || 'The progress check failed.');
+        setResources(data.resources || []);
+        return;
+      }
+
+      misses = 0;
+      if (data.status === 'ready' && data.result) { showReady(data.result); return; }
+      if (data.status === 'error') {
+        stopPolling();
+        setProgress(null);
+        setStatus('error');
+        setMessage(data.error || 'This video is not available for direct download.');
+        setResources(data.resources || []);
+        return;
+      }
+      setProgress((previous) => ({
+        // The info request has no percentage to report yet, so creep a little
+        // (capped) to show the user the job is alive.
+        percent: data.status === 'fetching-info'
+          ? Math.min(9, (previous?.percent || 0) + 1)
+          : Number(data.percent) || 0,
+        stage: data.stage,
+        downloaded: data.downloaded,
+        total: data.total,
+        speed: data.speed,
+        eta: data.eta,
+      }));
+      pollRef.current = setTimeout(tick, 700);
     };
     pollRef.current = setTimeout(tick, 400);
   };

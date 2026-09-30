@@ -1,9 +1,24 @@
 import Downloader from '../components/Downloader';
 import HistoryPanel from '../components/HistoryPanel';
 
+const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://komyosys-video-downloader.vercel.app';
+
 export const metadata = {
+  metadataBase: new URL(BASE_URL),
   title: 'KOMYOSYS Video Downloader',
   description: 'Turn public YouTube, TikTok, Instagram, and Facebook video links into a downloadable file, with a private history of what you saved.',
+  // Without these the tab shows the raw route and any share/link preview is blank.
+  openGraph: {
+    title: 'KOMYOSYS Video Downloader',
+    description: 'Turn public YouTube, TikTok, Instagram, and Facebook video links into a downloadable file.',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary',
+    title: 'KOMYOSYS Video Downloader',
+    description: 'Save public YouTube, TikTok, Instagram, and Facebook videos.',
+  },
+  robots: { index: true, follow: true },
 };
 
 export default function Home() {
