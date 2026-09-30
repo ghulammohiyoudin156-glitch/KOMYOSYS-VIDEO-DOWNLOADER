@@ -15,7 +15,12 @@ WORKDIR /app
 # Dependencies first, so this layer only rebuilds when package-lock.json changes.
 # postinstall runs get-ytdlp.js here and stores the Linux yt-dlp binary in bin/;
 # .dockerignore keeps the Windows binaries on this machine out of the image.
+# scripts/ MUST be copied before `npm install`: postinstall executes
+# `node scripts/get-ytdlp.js`, and if scripts/ is missing that step exits non-zero
+# and fails the whole build. Verified: npm exits 1 with "Cannot find module" when
+# the postinstall script is absent.
 COPY package.json package-lock.json ./
+COPY scripts/ ./scripts/
 ENV SKIP_FFMPEG_DOWNLOAD=1
 RUN npm install --no-audit --no-fund
 
