@@ -18,6 +18,13 @@ const EXAMPLE_URLS = {
   tiktok: 'https://www.tiktok.com/@username/video/...',
 };
 
+const detectPlatform = (inputUrl) => {
+  for (const [key, platform] of Object.entries(PLATFORMS)) {
+    if (platform.regex.test(inputUrl)) return { key, name: platform.name };
+  }
+  return null;
+};
+
 export default function Downloader() {
   const [url, setUrl] = useState('');
   const [status, setStatus] = useState('idle');
@@ -33,9 +40,14 @@ export default function Downloader() {
   // A history row can hand its link straight back to the input box.
   useEffect(() => subscribeRefill((link) => {
     setUrl(link);
-    updatePlatformInfo(link);
+    setDetectedPlatform(detectPlatform(link));
     setStatus('idle');
-    resetResults();
+    if (pollRef.current) clearTimeout(pollRef.current);
+    pollRef.current = null;
+    setProgress(null);
+    setVideoData(null);
+    setResources([]);
+    setMessage('');
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
     setTimeout(() => inputRef.current?.focus(), 260);
   }), []);
@@ -127,32 +139,10 @@ export default function Downloader() {
     pollRef.current = setTimeout(tick, 400);
   };
 
-  const validateUrl = (inputUrl) => {
-    return Object.values(PLATFORMS).some(p => p.regex.test(inputUrl));
-  };
-
-  const detectPlatform = (inputUrl) => {
-    for (const [key, platform] of Object.entries(PLATFORMS)) {
-      if (platform.regex.test(inputUrl)) {
-        return { key, name: platform.name };
-      }
-    }
-    return null;
-  };
-
-  const updatePlatformInfo = (inputUrl) => {
-    const platform = detectPlatform(inputUrl);
-    if (platform) {
-      setDetectedPlatform(platform);
-    } else {
-      setDetectedPlatform(null);
-    }
-  };
-
   const handleDownload = async () => {
     const trimmedUrl = url.trim();
     if (!trimmedUrl) { setStatus('error'); setMessage('Please enter a video URL.'); return; }
-    if (!validateUrl(trimmedUrl)) { setStatus('error'); setMessage('Invalid URL. Please enter a valid video URL from a supported platform.'); return; }
+    if (!detectPlatform(trimmedUrl)) { setStatus('error'); setMessage('Invalid URL. Please enter a valid video URL from a supported platform.'); return; }
     
     sourceUrlRef.current = trimmedUrl;
     resetResults();
@@ -170,14 +160,14 @@ export default function Downloader() {
 
   const handleInputChange = (e) => { 
     setUrl(e.target.value); 
-    updatePlatformInfo(e.target.value);
+    setDetectedPlatform(detectPlatform(e.target.value));
     if (status !== 'loading') { setStatus('idle'); resetResults(); } 
   };
   const handlePaste = async () => {
     try {
       const pastedUrl = await navigator.clipboard.readText();
       setUrl(pastedUrl);
-      updatePlatformInfo(pastedUrl);
+      setDetectedPlatform(detectPlatform(pastedUrl));
       setStatus('idle');
       resetResults();
     } catch {
@@ -191,7 +181,7 @@ export default function Downloader() {
     <div className="download-panel">
       <p className="panel-kicker">Link workspace</p>
       <h2 className="panel-title">Prepare your media</h2>
-      <p className="panel-description">Paste a public YouTube, Instagram, or Facebook link below. We will check the source before preparing an authorized file.</p>
+      <p className="panel-description">Paste a public YouTube, TikTok, Instagram, or Facebook link below. We will check the source before preparing an authorized file.</p>
       <label className="url-label" htmlFor="video-url">Video URL</label>
       <div className="url-input-wrap">
         <input id="video-url" ref={inputRef} className="url-input" type="url" value={url} onChange={handleInputChange} onKeyDown={handleKeyPress} placeholder={detectedPlatform ? EXAMPLE_URLS[detectedPlatform.key] : 'https://www.youtube.com/watch?v=...'} disabled={status === 'loading'} autoComplete="off" />

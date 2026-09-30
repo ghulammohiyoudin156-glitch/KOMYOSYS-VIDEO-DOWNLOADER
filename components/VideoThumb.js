@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Image from 'next/image';
 import { metaOf } from '../lib/history';
 
 // Platform art when the source never gave us a thumbnail (or the image is gone).
@@ -15,5 +16,17 @@ export default function VideoThumb({ entry, className }) {
       </div>
     );
   }
-  return <img className={className} src={entry.thumbnail} alt="" loading="lazy" onError={() => setBroken(true)} />;
+  return (
+    <Image
+      className={className}
+      src={entry.thumbnail}
+      alt=""
+      width={640}
+      height={360}
+      loading="lazy"
+      unoptimized
+      referrerPolicy="no-referrer"
+      onError={() => setBroken(true)}
+    />
+  );
 }

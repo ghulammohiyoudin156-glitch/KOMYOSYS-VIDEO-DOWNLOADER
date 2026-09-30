@@ -316,7 +316,16 @@ const fetchInfo = async (job, args) => {
 
 export async function POST(request) {
   try {
-    const { url } = await request.json();
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { success: false, error: 'Request body must be valid JSON.' },
+        { status: 400 }
+      );
+    }
+    const { url } = body || {};
 
     if (!url || typeof url !== 'string') {
       return NextResponse.json(
@@ -338,7 +347,10 @@ export async function POST(request) {
     }
 
     const job = createJob(platform);
-    void runJob(job, { requestUrl, platform, trimmedUrl });
+    void runJob(job, { requestUrl, platform, trimmedUrl }).catch((error) => {
+      console.error('Download job failed unexpectedly:', error);
+      failJob(job, 'The download could not be completed due to a server error. Please try again.', [], 500);
+    });
 
     return NextResponse.json({ success: true, jobId: job.id, platform });
   } catch (error) {
@@ -423,8 +435,8 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
       const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
       const facebookPageId = process.env.FACEBOOK_PAGE_ID;
 
-      if (!providerError && (!accessToken || !facebookPageId)) {
-        return failJob(job, 'Facebook integration is not configured yet. Add FACEBOOK_PAGE_ACCESS_TOKEN and FACEBOOK_PAGE_ID to .env.local, then restart the server.', [
+      if (!accessToken || !facebookPageId) {
+        return failJob(job, 'The direct Facebook download failed, and the optional Graph API fallback is not configured. Add FACEBOOK_PAGE_ACCESS_TOKEN and FACEBOOK_PAGE_ID to the host environment.', [
           { label: 'Open the Meta developer dashboard', url: 'https://developers.facebook.com/apps/' },
           { label: 'Read the Facebook Graph API video documentation', url: 'https://developers.facebook.com/docs/video-api/' },
         ], 503);
@@ -455,8 +467,8 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
       const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
       const instagramUserId = process.env.INSTAGRAM_USER_ID;
 
-      if (!providerError && (!accessToken || !instagramUserId)) {
-        return failJob(job, 'Instagram integration is not configured yet. Add INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_USER_ID to .env.local, then restart the server.', [
+      if (!accessToken || !instagramUserId) {
+        return failJob(job, 'The direct Instagram download failed, and the optional Graph API fallback is not configured. Add INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_USER_ID to the host environment.', [
           { label: 'Open the Meta developer dashboard', url: 'https://developers.facebook.com/apps/' },
           { label: 'Read Instagram Graph API setup', url: 'https://developers.facebook.com/docs/instagram-api/getting-started' },
         ], 503);
