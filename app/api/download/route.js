@@ -13,6 +13,13 @@ const readyDownloads = new Map();
 const binDir = path.join(process.cwd(), 'bin');
 const ytdlpPath = path.join(binDir, process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
 const ffmpegPath = path.join(binDir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+const downloaderBackendOrigin = () => {
+  const configured = String(process.env.DOWNLOADER_BACKEND_URL || '').trim();
+  if (!configured) return '';
+  const url = new URL(configured);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('DOWNLOADER_BACKEND_URL must use HTTP or HTTPS.');
+  return url.origin;
+};
 
 const cleanDownload = async (token) => {
   const item = readyDownloads.get(token);
@@ -315,6 +322,33 @@ const fetchInfo = async (job, args) => {
 };
 
 export async function POST(request) {
+  const backendConfigured = String(process.env.DOWNLOADER_BACKEND_URL || '').trim();
+  if (process.env.VERCEL && !backendConfigured) {
+    return NextResponse.json(
+      { success: false, error: 'Vercel cannot reliably run download jobs directly. Deploy the Dockerfile to Render and set DOWNLOADER_BACKEND_URL in Vercel.' },
+      { status: 503 }
+    );
+  }
+  if (backendConfigured) {
+    try {
+      const backendOrigin = downloaderBackendOrigin();
+      const upstream = await fetch(`${backendOrigin}/api/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': request.headers.get('content-type') || 'application/json' },
+        body: await request.text(),
+        cache: 'no-store',
+        signal: AbortSignal.timeout(15000),
+      });
+      return NextResponse.json(await upstream.json(), { status: upstream.status });
+    } catch (error) {
+      console.error('Downloader backend request failed:', error);
+      return NextResponse.json(
+        { success: false, error: 'The persistent downloader service is unavailable. Check DOWNLOADER_BACKEND_URL and the Render service status.' },
+        { status: 503 }
+      );
+    }
+  }
+
   try {
     let body;
     try {
@@ -527,6 +561,35 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
 export async function GET(request) {
   // `?job=<id>` reports live progress; `?token=<id>` streams the finished file.
   const jobId = request.nextUrl.searchParams.get('job');
+  if (String(process.env.DOWNLOADER_BACKEND_URL || '').trim()) {
+    try {
+      const backendOrigin = downloaderBackendOrigin();
+      const token = request.nextUrl.searchParams.get('token');
+      if (token) {
+        const target = new URL('/api/download', backendOrigin);
+        target.searchParams.set('token', token);
+        return NextResponse.redirect(target, 307);
+      }
+      if (!jobId) {
+        return NextResponse.json({ success: false, error: 'A download job is required.' }, { status: 400 });
+      }
+      const target = new URL('/api/download', backendOrigin);
+      target.searchParams.set('job', jobId);
+      const upstream = await fetch(target, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+      const data = await upstream.json();
+      if (data.result?.videoUrl?.startsWith('/')) {
+        data.result.videoUrl = `${backendOrigin}${data.result.videoUrl}`;
+      }
+      return NextResponse.json(data, { status: upstream.status });
+    } catch (error) {
+      console.error('Downloader backend poll failed:', error);
+      return NextResponse.json(
+        { success: false, error: 'The persistent downloader service is unavailable. Check DOWNLOADER_BACKEND_URL and the Render service status.' },
+        { status: 503 }
+      );
+    }
+  }
+
   if (jobId) {
     const job = downloadJobs.get(jobId);
     if (!job) {

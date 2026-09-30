@@ -100,10 +100,28 @@ child processes and a real filesystem. Check any URL with `GET /api/health`:
 `"ok": true` means it can serve downloads, `"ok": false` means the engine is not
 there and every link will fail with "the downloader engine is missing".
 
-**Vercel can host the site but not the downloads.** Its build succeeds (the
-bootstrap scripts swallow errors and exit 0), yet a serverless function cannot
-spawn `bin/yt-dlp`, so `/api/health` reports `ok: false` there for every platform,
-YouTube included. Keep Vercel for the UI or move the whole app:
+**Vercel is not a reliable host for the download jobs.** The API starts a native
+`yt-dlp` process and keeps job state in memory; serverless functions can stop
+after the request or route later polls to another instance. A health response
+showing the binaries exist does not prove a download job can finish there.
+Without `DOWNLOADER_BACKEND_URL`, Vercel now reports `ok: false` from
+`/api/health` and rejects download submissions with a configuration message
+instead of leaving the browser stuck on a job that cannot finish.
+
+For the simplest deployment, move the whole app to a persistent container host.
+If you want to keep the UI on Vercel, deploy this repo to Render first, then set
+`DOWNLOADER_BACKEND_URL` in Vercel to the Render service URL. The Vercel API
+forwards job creation and progress checks to Render, and sends the finished file
+link directly to Render so large videos do not pass through Vercel:
+
+```text
+DOWNLOADER_BACKEND_URL=https://your-render-service.onrender.com
+```
+
+After setting the variable, redeploy the Vercel project and confirm
+`/api/health` returns `ok: true` with the Render engine status.
+
+For local/container deployment, the app can continue to run the downloader itself:
 
 ```bash
 docker build -t komyosys-downloader .
