@@ -288,6 +288,24 @@ const runYtdlp = (job, args) => new Promise((resolve) => {
   });
 });
 
+// YouTube answers a throttled or briefly broken transfer with a 403/timeout partway
+// through a stream. Those are worth another go, because yt-dlp keeps the partial
+// `.part` file in `directory` and picks the transfer back up instead of starting over.
+const isTransient = (message) => /HTTP Error (403|429|5\d\d)|Forbidden|Too Many Requests|read timeout|Connection reset|Remote end closed/i.test(String(message || ''));
+
+const runWithRetry = async (job, args, directory, attempts = 3) => {
+  let result = await runYtdlp(job, args);
+  for (let attempt = 1; attempt < attempts && !result.ok && isTransient(result.message); attempt += 1) {
+    const partial = await fs.readdir(directory).catch(() => []);
+    if (!partial.some((file) => file.endsWith('.part'))) break; // nothing to resume
+    setStage(job, 'downloading', 'Connection throttled by the source - resuming...', job.percent);
+    await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
+    // The signed media URLs expire, so they have to be fetched again before resuming.
+    result = await runYtdlp(job, args);
+  }
+  return result;
+};
+
 // One metadata request up front: gives the title and the byte sizes that make the
 // overall percentage accurate across the video + audio streams.
 const fetchInfo = async (job, args) => {
@@ -434,8 +452,23 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
     ...(ffmpeg.location ? ['--ffmpeg-location', ffmpeg.location] : []),
   ];
 
+  // YouTube's CDN throttles long transfers from one IP and answers a burst of range
+  // requests with `HTTP Error 403: Forbidden` partway through a stream. Asking for a
+  // single fragment at a time keeps the request rate low enough to get past it, and
+  // the longer linear backoff gives a throttled client time to be let back in.
+  const throttleArgs = [
+    '--concurrent-fragments', '1',
+    '--retries', '10',
+    '--fragment-retries', '10',
+    '--retry-sleep', 'linear=1::5',
+  ];
+
   const infoError = await fetchInfo(job, [...baseArgs, '-J', '--no-progress', '--', requestUrl]);
-  const run = await runYtdlp(job, [...baseArgs, '-o', outputTemplate, '--', requestUrl]);
+  const run = await runWithRetry(
+    job,
+    [...baseArgs, ...throttleArgs, '-o', outputTemplate, '--', requestUrl],
+    directory,
+  );
 
   if (run.ok) {
     const files = (await fs.readdir(directory)).filter((file) => (
