@@ -28,16 +28,21 @@ services:
     # engine shows up in the JSON (ok:false) rather than as a failed deploy.
     healthCheckPath: /api/health
 
-    # Region is commented out so the Blueprint always syncs. Uncomment the
-    # closest one - Singapore is the fastest for South Asia.
-    # region: singapore
-    # region: ohio
-    # region: oregon
+    # Pinned to Singapore, the closest Render region to South Asia. Render's default is
+    # Oregon (USA), which roughly doubles the round-trip time for every one of the many
+    # small progress polls a single download makes - visible as a laggy progress bar.
+    # Other candidates: singapore | frankfurt | ohio | oregon | virginia
+    region: singapore
 
-    # plan is omitted on purpose: the default is 0.5c-512mb, and a paid tier
-    # is recommended for real use because 500 MB downloads need the RAM and
-    # the extra ephemeral disk. See "Hosting it online" in README.md.
-    # plan: 1c-2g
+    # Pinned to "free" (0.1 CPU / 512 MB RAM) so the Blueprint always resolves to the
+    # same instance instead of inheriting whatever the dashboard defaults to.
+    #
+    # 0.1 CPU is the real constraint, not the RAM: a download is mostly waiting on the
+    # network, but the ffmpeg merge that muxes video+audio is CPU-bound and will crawl
+    # here, and Free also sleeps after 15 idle minutes. Both are acceptable for short
+    # clips (Reels, TikTok, Shorts). The first thing to break on a long 1080p video is
+    # the merge. When that happens change this to "starter" (0.5 CPU, 512 MB, no sleep).
+    plan: free
 
     envVars:
       # Hard cap on the height of the video we ask each engine for, so a
