@@ -497,10 +497,11 @@ const VERCEL_NO_BACKEND_NOTE = 'No DOWNLOADER_BACKEND_URL is set on this Vercel 
 
 // Where a visitor on a UI-only deployment should be sent. Set PUBLIC_DOWNLOAD_URL in the
 // host environment to override; the fallback keeps the button pointing somewhere real
-// instead of leaving the visitor with a dead end.
+// instead of leaving the visitor with a dead end. Keep this in sync with the tunnel that
+// is actually running - a stale host here means the button leads to a dead site.
 const workingSiteUrl = () => {
   const configured = String(process.env.PUBLIC_DOWNLOAD_URL || '').trim();
-  return configured || 'https://stages-interactive-dave-attendance.trycloudflare.com';
+  return configured || 'https://large-taxis-taste.loca.lt';
 };
 
 export async function POST(request) {
