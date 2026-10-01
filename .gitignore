@@ -5,3 +5,5 @@ bin/
 *.log
 .vercel
 .env*
+# Signed-in session cookies never belong in the repository.
+cookies/

@@ -338,7 +338,7 @@ const BROWSER_LOCKED_HINT = ' A signed-in browser session was found but could no
 // running as a different user (a service, or an elevated prompt) can see the cookie file but
 // not decrypt it. Closing the browser does not help, so this says what does: export the
 // session to a cookies.txt by hand and point the app at that file.
-const BROWSER_UNDECRYPTABLE_HINT = ' Your signed-in browser session was found, but Chrome 127+ encrypts cookies with App-Bound encryption and will not hand them to any other program, including this one - so this is a browser change, not a mistake on your side, and closing the browser will not help. The way through is to export your signed-in session once with a cookies.txt browser extension, then set INSTAGRAM_COOKIES_FILE (or FACEBOOK_COOKIES_FILE) to that file.';
+const BROWSER_UNDECRYPTABLE_HINT = ' Instagram and Facebook only serve these posts to a signed-in account, and Chrome 127+ will not let any other program read its cookies (App-Bound encryption), so reading the browser directly cannot work. The fix is a one-time export: sign in to Instagram/Facebook in Chrome, install a "Get cookies.txt LOCALLY" extension, export your cookies, and save the file as cookies.txt in the Downloads folder. This app picks it up automatically - no setting to change.';
 
 // Each browser probe has to wait for a full page load, and every browser installed on the
 // machine is probed before giving up. A slow probe therefore stalls the job for minutes, so
@@ -599,8 +599,29 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
     .map((name) => String(process.env[name] || '').trim())
     .find(Boolean) || '';
 
+  // Falling back to a cookies.txt that is simply lying around saves the user from having to
+  // set an environment variable and restart the server just to get Instagram or Facebook
+  // working. The Downloads folder and the project folder are where an exported file
+  // realistically lands, so those are checked before giving up.
+  const autoCookieFiles = [
+    path.join(process.cwd(), 'cookies.txt'),
+    path.join(os.homedir(), 'Downloads', 'cookies.txt'),
+    path.join(os.homedir(), 'Desktop', 'cookies.txt'),
+  ];
+  let cookieFileMissing = false;
+  if (!cookieFile) {
+    for (const candidate of autoCookieFiles) {
+      if (await fs.access(candidate).then(() => true).catch(() => false)) {
+        cookieFile = candidate;
+        break;
+      }
+    }
+  } else if (!(await fs.access(cookieFile).then(() => true).catch(() => false))) {
+    cookieFileMissing = true;
+  }
+
   const cookiePlatform = platform.charAt(0).toUpperCase() + platform.slice(1);
-  if (cookieFile && !(await fs.access(cookieFile).then(() => true).catch(() => false))) {
+  if (cookieFileMissing) {
     return failJob(job, `The ${cookiePlatform} cookies file "${cookieFile}" could not be read. Point the cookies setting at a cookies.txt exported from a signed-in browser, or leave it empty.`, [], 503);
   }
 
