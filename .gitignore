@@ -3,6 +3,14 @@ node_modules/
 .env.local
 bin/
 *.log
+*.err
+*.err.log
+build.log
+dev-server.log
+server.log
+server.err
+server.err.log
+build.log
 .vercel
 .env*
 # Signed-in session cookies never belong in the repository.
