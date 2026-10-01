@@ -236,6 +236,17 @@ const FFMPEG_HINT = ' Install ffmpeg (Windows: winget install Gyan.FFmpeg, macOS
 const TIKTOK_HINT = ' TikTok also screens the network it is asked from: hosting providers and some regions are refused outright, while a TIKTOK_COOKIES_FILE exported from a signed-in browser, or running this app on a home connection, usually gets through.';
 const needsTiktokHint = (message) => /blocked|cookies|login|logged in|unsupported url|region|403/i.test(message);
 
+// A TikTok "photo post" is a carousel of still images, not a video, and yt-dlp refuses it
+// outright ("Unsupported URL"). Only the fully resolved /photo/<id> form can be identified
+// with certainty; a short vt.tiktok.com link hides the type until TikTok redirects it, so
+// those still fall through to the error handler below.
+const PHOTO_POST_PATTERN = /tiktok\.com\/@[^/]+\/photo\//i;
+const isPhotoPostUrl = (value) => PHOTO_POST_PATTERN.test(value);
+
+// Reported up front so the user is told what the link actually is, instead of watching a job
+// run and then getting a raw "Unsupported URL" back from yt-dlp.
+const PHOTO_POST_MESSAGE = 'This is a TikTok photo post (a slideshow of images), not a video, so there is no video file to download. Open the post in TikTok and use "Save photo" to keep the individual images, or send a link to a post that has a video in it.';
+
 const videoFormat = (platform, ffmpegAvailable) => {
   if (platform === 'tiktok') {
     const cap = tiktokMaxHeight();
@@ -409,6 +420,21 @@ export async function POST(request) {
     if (!platform) {
       return NextResponse.json(
         { success: false, error: 'Invalid URL. Please provide a valid YouTube, TikTok, Facebook, or Instagram video URL.' },
+        { status: 400 }
+      );
+    }
+
+    // Rejected before a job is created, so the user is told the link is a photo slideshow
+    // straight away rather than after a progress bar that was never going to produce a file.
+    if (platform === 'tiktok' && isPhotoPostUrl(requestUrl)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: PHOTO_POST_MESSAGE,
+          resources: [
+            { label: 'Open TikTok to save the images', url: 'https://www.tiktok.com/' },
+          ],
+        },
         { status: 400 }
       );
     }
@@ -604,8 +630,16 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
       { label: 'Explore the official Graph APIs', url: 'https://developers.facebook.com/' },
     ];
 
-  failJob(job, providerError
-    ? `The video could not be downloaded: ${providerError.replace(/^ERROR:\s*/, '').slice(0, 240)}${platform === 'youtube' && ffmpegMissing ? FFMPEG_HINT : ''}${platform === 'tiktok' && needsTiktokHint(providerError) ? TIKTOK_HINT : ''}`
+  // A short share link only reveals that it points at a photo post once TikTok has redirected
+  // it and yt-dlp has refused it, so the same explanation is repeated here rather than letting
+  // the raw "Unsupported URL" reach the user.
+  const unsupported = /unsupported url/i.test(providerError || '');
+  const photoPost = platform === 'tiktok' && (isPhotoPostUrl(requestUrl) || unsupported);
+
+  failJob(job, photoPost
+    ? PHOTO_POST_MESSAGE
+    : providerError
+      ? `The video could not be downloaded: ${providerError.replace(/^ERROR:\s*/, '').slice(0, 240)}${platform === 'youtube' && ffmpegMissing ? FFMPEG_HINT : ''}${platform === 'tiktok' && needsTiktokHint(providerError) ? TIKTOK_HINT : ''}`
     : platform === 'youtube'
       ? `YouTube did not return a downloadable file for this link. The video may be private, age-restricted, region locked, or a live stream.${ffmpegMissing ? FFMPEG_HINT : ''}`
       : platform === 'tiktok'
