@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { execFile, spawn, spawnSync } from 'child_process';
-import { createReadStream } from 'fs';
+import { createReadStream, existsSync } from 'fs';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -263,6 +263,89 @@ const isPhotoPostUrl = (value) => PHOTO_POST_PATTERN.test(value);
 // run and then getting a raw "Unsupported URL" back from yt-dlp.
 const PHOTO_POST_MESSAGE = 'This is a TikTok photo post (a slideshow of images), not a video, so there is no video file to download. Open the post in TikTok and use "Save photo" to keep the individual images, or send a link to a post that has a video in it.';
 
+// Instagram and Facebook refuse anonymous requests outright ("Instagram API is not granting
+// access", "Cannot parse data"), because those pages are only rendered for a logged-in
+// account. yt-dlp can read the cookies straight out of a browser profile that is already
+// signed in, so when the plain attempt is refused each locally installed browser is tried in
+// turn. Nothing is bypassed - the request is simply made as the account the person already
+// is. Each probe just has to reach Instagram's login page; the cookie jar is copied
+// internally so a profile that Chrome has locked still works.
+const BROWSER_COOKIE_TARGETS = ['chrome', 'edge', 'firefox', 'brave', 'opera'];
+// Only browsers that are actually installed are probed. yt-dlp spends several seconds
+// deciding that a missing profile does not exist, and with five candidates on the list a
+// machine that has neither Firefox nor Brave pays that cost on every failed download.
+const BROWSER_PROFILE_DIRS = {
+  chrome: '%LOCALAPPDATA%/Google/Chrome/User Data',
+  edge: '%LOCALAPPDATA%/Microsoft/Edge/User Data',
+  firefox: '%APPDATA%/Mozilla/Firefox/Profiles',
+  brave: '%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data',
+  opera: '%APPDATA%/Opera Software/Opera Stable',
+};
+
+const browserInstalled = (target) => {
+  const relative = BROWSER_PROFILE_DIRS[target];
+  return Boolean(relative) && existsSync(path.join(...relative.split('/').map((part) => (
+    part.startsWith('%') ? process.env[part.slice(1, -1)] || '' : part
+  ))));
+};
+
+// Filled in by browserHasSession: why each profile could not be used. `locked` means the
+// browser is open, `undecryptable` means the cookie store exists but Windows refused to
+// decrypt it. Reporting the reason turns an unexplained failure into a real next step.
+const LOCKED_BROWSERS = new Set();
+const UNDECRYPTABLE_BROWSERS = new Set();
+
+const browserHasSession = (target) => {
+  const probe = [
+    '--cookies-from-browser', target,
+    '--simulate', '--skip-download', '--no-warnings', '--playlist-items', '0',
+    '--', 'https://www.instagram.com/',
+  ];
+  const result = spawnSync(ytdlpPath, probe, { windowsHide: true, timeout: BROWSER_PROBE_TIMEOUT, encoding: 'utf8' });
+  const output = `${result.stdout || ''}${result.stderr || ''}`;
+  // Chrome and Edge hold an exclusive lock on their cookie database while running, so the
+  // profile cannot be read. That is worth saying out loud - closing the browser is all it
+  // takes, and without that hint the message looks like an app fault.
+  if (/could not copy|EncryptedCookie|database is locked/i.test(output)) {
+    LOCKED_BROWSERS.add(target);
+    return false;
+  }
+  // The cookie store is readable as a file but Windows refuses to decrypt the values, which
+  // happens when the server process does not run as the Windows user who owns that profile.
+  // Closing the browser does not help here, so it is kept separate from the locked case.
+  if (/Failed to decrypt with DPAPI|dpapi/i.test(output)) {
+    UNDECRYPTABLE_BROWSERS.add(target);
+    return false;
+  }
+  if (/no cookies|not found|failed to open|Unsupported/i.test(output)) return false;
+  // Reached the page and the extractor got as far as asking for the real API response, which
+  // only happens once cookies were supplied.
+  return !/ERROR:/i.test(output) || /login|required|challenge/i.test(output);
+};
+
+const BROWSER_LOCKED = /could not copy.*cookie database|encryptedcookie|database is locked/i;
+
+// Reported so the answer to "why did Instagram/Facebook fail" is on screen rather than left
+// for the user to guess from a raw extractor error.
+const LOGIN_HINT = ' Instagram and Facebook only hand over the real media link to a signed-in account. Two steps fix this: (1) close Chrome, Edge or Firefox completely, including the icon in the system tray, then (2) press Download again. The app then makes the request using the session you are already signed in to. Some hosting providers and regions are refused no matter who is signed in.';
+
+// Chrome, Edge and Firefox keep an exclusive lock on their cookie database while they are
+// running, so the signed-in session cannot be read. Quitting the browser is the whole fix,
+// and saying so is more use than any extractor message.
+const BROWSER_LOCKED_HINT = ' A signed-in browser session was found but could not be read because the browser is still open. Close Chrome, Edge or Firefox completely (check the tray), then press Download again - the app will use the session you are already signed in to.';
+
+// Windows encrypts browser cookies with a key tied to the Windows user account, so a server
+// running as a different user (a service, or an elevated prompt) can see the cookie file but
+// not decrypt it. Closing the browser does not help, so this says what does: export the
+// session to a cookies.txt by hand and point the app at that file.
+const BROWSER_UNDECRYPTABLE_HINT = ' Your signed-in browser session was found, but Chrome 127+ encrypts cookies with App-Bound encryption and will not hand them to any other program, including this one - so this is a browser change, not a mistake on your side, and closing the browser will not help. The way through is to export your signed-in session once with a cookies.txt browser extension, then set INSTAGRAM_COOKIES_FILE (or FACEBOOK_COOKIES_FILE) to that file.';
+
+// Each browser probe has to wait for a full page load, and every browser installed on the
+// machine is probed before giving up. A slow probe therefore stalls the job for minutes, so
+// the budget is kept short: if a profile cannot be read this quickly it is not going to be
+// readable at all, and the browser-locked hint is the more useful answer anyway.
+const BROWSER_PROBE_TIMEOUT = 12000;
+
 const videoFormat = (platform, ffmpegAvailable) => {
   if (platform === 'tiktok') {
     const cap = tiktokMaxHeight();
@@ -482,6 +565,12 @@ export async function POST(request) {
 const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
   let providerError = '';
   let ffmpegMissing = false;
+  // Set when a browser holding a signed-in session was open, which is the one case where
+  // the fix is on the user's side: quitting the browser frees the cookie store. The same is
+  // true when Windows refused to decrypt that store - neither can be fixed from here, but
+  // the two need different words so the message matches the real cause.
+  let browserWasLocked = false;
+  let browserWasUndecryptable = false;
 
   const ffmpeg = await probeFfmpeg();
   ffmpegMissing = platform === 'youtube' && !ffmpeg.available;
@@ -493,17 +582,26 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
     return failJob(job, 'That link points to a host this tool is not allowed to reach. Use the official video page link.', [], 503);
   }
 
-  // TikTok can hide posts behind a region or login check. A Netscape cookies.txt
-  // exported from a signed-in browser is the supported way past that - nothing is
-  // bypassed, the request is simply made as the account that already can see it.
-  const cookiesFile = String(
-    (platform === 'tiktok' ? process.env.TIKTOK_COOKIES_FILE : '')
-    || (platform === 'youtube' ? process.env.YOUTUBE_COOKIES_FILE : '')
-    || ''
-  ).trim();
-  const cookiePlatform = platform === 'tiktok' ? 'TikTok' : 'YouTube';
-  if (cookiesFile && !(await fs.access(cookiesFile).then(() => true).catch(() => false))) {
-    return failJob(job, `The ${cookiePlatform} cookies file "${cookiesFile}" could not be read. Point the cookies setting at a cookies.txt exported from a signed-in browser, or leave it empty.`, [], 503);
+  // Instagram, Facebook and TikTok answer a request made from a signed-in account and
+  // refuse anonymous ones. Instagram in particular returns an empty media response for a
+  // reel whose owner has a private or restricted account. A cookies.txt exported from a
+  // signed-in browser is the supported way past that: nothing is bypassed, the request is
+  // simply made as the account that can already see the post. A single COOKIES_FILE covers
+  // every platform and the per-platform variable wins when both are set.
+  const COOKIE_ENV_BY_PLATFORM = {
+    youtube: ['YOUTUBE_COOKIES_FILE', 'COOKIES_FILE'],
+    tiktok: ['TIKTOK_COOKIES_FILE', 'COOKIES_FILE'],
+    instagram: ['INSTAGRAM_COOKIES_FILE', 'COOKIES_FILE'],
+    facebook: ['FACEBOOK_COOKIES_FILE', 'COOKIES_FILE'],
+  };
+
+  const cookieFile = COOKIE_ENV_BY_PLATFORM[platform]
+    .map((name) => String(process.env[name] || '').trim())
+    .find(Boolean) || '';
+
+  const cookiePlatform = platform.charAt(0).toUpperCase() + platform.slice(1);
+  if (cookieFile && !(await fs.access(cookieFile).then(() => true).catch(() => false))) {
+    return failJob(job, `The ${cookiePlatform} cookies file "${cookieFile}" could not be read. Point the cookies setting at a cookies.txt exported from a signed-in browser, or leave it empty.`, [], 503);
   }
 
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'komyosys-'));
@@ -517,7 +615,7 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
     '--max-filesize', '500M',
     '--newline',
     '-f', videoFormat(platform, ffmpeg.available),
-    ...(cookiesFile ? ['--cookies', cookiesFile] : []),
+    ...(cookieFile ? ['--cookies', cookieFile] : []),
     ...(ffmpeg.location ? ['--ffmpeg-location', ffmpeg.location] : []),
   ];
 
@@ -551,10 +649,11 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
 // client; anything else is a real failure and is reported as-is.
 const CLIENT_REFUSAL = /sign in to confirm|confirm you'?re not a bot|429|too many requests|requested format is not available/i;
 
-  const attemptArgs = (client) => [
+  const attemptArgs = (client, extra = []) => [
     ...baseArgs,
     ...jsArgs,
     ...(client ? ['--extractor-args', `youtube:player_client=${client}`] : []),
+    ...extra,
   ];
 
   // Metadata is fetched first so the UI can show the title, thumbnail and duration straight
@@ -579,6 +678,44 @@ const CLIENT_REFUSAL = /sign in to confirm|confirm you'?re not a bot|429|too man
       }
       providerError = retry.message || providerError;
     }
+  }
+
+  // Instagram and Facebook answer an anonymous request with a login/refusal error rather
+  // than a link. Both keep the page behind a signed-in session, so the same attempt is
+  // repeated using the cookies of a browser on this machine that is already signed in. The
+  // cookie file from the environment, when set, already took part in the first attempt.
+  const needsLogin = (message) => (
+    /not granting access|empty media response|login required|sign in|cannot parse data|unsupported url|private|restricted/i
+      .test(String(message || ''))
+  );
+  if (!run.ok && !cookieFile && ['instagram', 'facebook'].includes(platform) && needsLogin(run.message)) {
+    let browserLocked = false;
+    let browserUndecryptable = false;
+    for (const target of BROWSER_COOKIE_TARGETS) {
+      // Skipping browsers that are not installed keeps the failure fast: probing a missing
+      // profile still costs yt-dlp a few seconds, and the user is staring at a spinner.
+      if (!browserInstalled(target)) continue;
+      if (!browserHasSession(target)) {
+        // A browser that is open holds its cookie store, so remember that the fix is simply
+        // to close it and say so rather than reporting a bare extractor error.
+        if (LOCKED_BROWSERS.has(target)) browserLocked = true;
+        if (UNDECRYPTABLE_BROWSERS.has(target)) browserUndecryptable = true;
+        continue;
+      }
+      setStage(job, 'fetching-info', `Signing in with ${target}...`, job.percent);
+      const retry = await runWithRetry(
+        job,
+        [...attemptArgs(null, ['--cookies-from-browser', target]), ...throttleArgs, '-o', outputTemplate, '--', requestUrl],
+        directory,
+      );
+      if (retry.ok) {
+        run = retry;
+        break;
+      }
+      providerError = retry.message || providerError;
+    }
+    if (browserLocked) browserWasLocked = true;
+    if (browserUndecryptable) browserWasUndecryptable = true;
   }
 
   if (run.ok) {
@@ -609,7 +746,11 @@ const CLIENT_REFUSAL = /sign in to confirm|confirm you'?re not a bot|429|too man
     await fs.rm(directory, { recursive: true, force: true });
   }
 
-    if (platform === 'facebook') {
+    // The Graph API fallback is only worth trying when the direct attempt gave no usable
+    // reason to report. When yt-dlp already explained itself (a login wall, for instance)
+    // that explanation reaches the user further down together with the login hint, which
+    // says far more than "a fallback is not configured".
+    if (platform === 'facebook' && !providerError) {
       const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
       const facebookPageId = process.env.FACEBOOK_PAGE_ID;
 
@@ -641,7 +782,7 @@ const CLIENT_REFUSAL = /sign in to confirm|confirm you'?re not a bot|429|too man
       }
     }
 
-    if (platform === 'instagram') {
+    if (platform === 'instagram' && !providerError) {
       const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
       const instagramUserId = process.env.INSTAGRAM_USER_ID;
 
@@ -704,11 +845,40 @@ const YOUTUBE_BOT_HINT = ' YouTube has rate limited this network and is now aski
   const unsupported = /unsupported url/i.test(providerError || '');
   const photoPost = platform === 'tiktok' && (isPhotoPostUrl(requestUrl) || unsupported);
   const botChecked = platform === 'youtube' && CLIENT_REFUSAL.test(providerError || '');
+  const loginNeeded = ['instagram', 'facebook'].includes(platform) && needsLogin(providerError || '');
+
+  // When the extractor refused because the post needs a signed-in account, the raw
+  // yt-dlp sentence ("Instagram sent an empty media response... use --cookies") is noise to
+  // a visitor of this page: it names command line flags they have no way to run. The
+  // guidance below already says what to do, so only the diagnosis is kept, not the jargon.
+  const cleanReason = (message) => {
+    const text = String(message || '').replace(/^ERROR:\s*/, '').split('\n').pop().trim();
+    const jargon = /empty media response|not granting access|cannot parse data|login required|cookies-from-browser|--cookies\b|Unsupported URL/i;
+    if (!loginNeeded && !jargon.test(text)) return text.slice(0, 240);
+    if (/cannot parse data/i.test(text)) {
+      return 'Facebook did not return the video data for this link.';
+    }
+    return 'This post is only visible to a signed-in account.';
+  };
+
+  // "Close the browser" and "Windows cannot decrypt the cookies" can both be true of the same
+// machine. Only the second one is the real blocker, so it is shown alone - telling the user
+// to close a browser that will not help is worse than saying nothing.
+const sessionHint = browserWasUndecryptable
+    ? BROWSER_UNDECRYPTABLE_HINT
+    : browserWasLocked
+      ? BROWSER_LOCKED_HINT
+      : '';
+
+  // The login hint ends with "close your browser", which is useless once the cookie store has
+  // proven unreadable. In that case the account is irrelevant and the message is replaced
+  // rather than appended, so the two never contradict each other.
+  const loginHint = browserWasUndecryptable || browserWasLocked ? '' : LOGIN_HINT;
 
   failJob(job, photoPost
     ? PHOTO_POST_MESSAGE
     : providerError
-      ? `The video could not be downloaded: ${providerError.replace(/^ERROR:\s*/, '').slice(0, 240)}${botChecked ? YOUTUBE_BOT_HINT : ''}${platform === 'youtube' && ffmpegMissing ? FFMPEG_HINT : ''}${platform === 'tiktok' && needsTiktokHint(providerError) ? TIKTOK_HINT : ''}`
+      ? `The video could not be downloaded: ${cleanReason(providerError)}${botChecked ? YOUTUBE_BOT_HINT : ''}${loginNeeded ? loginHint : ''}${sessionHint}${platform === 'youtube' && ffmpegMissing ? FFMPEG_HINT : ''}${platform === 'tiktok' && needsTiktokHint(providerError) ? TIKTOK_HINT : ''}`
     : platform === 'youtube'
       ? `YouTube did not return a downloadable file for this link. The video may be private, age-restricted, region locked, or a live stream.${ffmpegMissing ? FFMPEG_HINT : ''}`
       : platform === 'tiktok'
