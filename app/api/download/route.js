@@ -487,11 +487,33 @@ const fetchInfo = async (job, args) => {
   }
 };
 
+// Shown to visitors, not to developers. The old wording leaked deployment internals
+// ("Dockerfile", "DOWNLOADER_BACKEND_URL") at somebody who only pasted a link, which
+// reads as a broken site rather than a hosting limitation. The plain sentence is what
+// the visitor gets; `developerNote` still carries the fix for whoever operates this.
+const VERCEL_NO_BACKEND_MESSAGE = 'Downloads are not switched on for this preview site yet. This page is only the front end - the downloader engine needs an always-on server, which this copy is not connected to. Use the working download site below and your download will run normally.';
+
+const VERCEL_NO_BACKEND_NOTE = 'No DOWNLOADER_BACKEND_URL is set on this Vercel project, so POST /api/download is refused on purpose. Deploy the repo Dockerfile to a persistent host (render.yaml is ready) and set DOWNLOADER_BACKEND_URL to that service origin.';
+
+// Where a visitor on a UI-only deployment should be sent. Set PUBLIC_DOWNLOAD_URL in the
+// host environment to override; the fallback keeps the button pointing somewhere real
+// instead of leaving the visitor with a dead end.
+const workingSiteUrl = () => {
+  const configured = String(process.env.PUBLIC_DOWNLOAD_URL || '').trim();
+  return configured || 'https://stages-interactive-dave-attendance.trycloudflare.com';
+};
+
 export async function POST(request) {
   const backendConfigured = String(process.env.DOWNLOADER_BACKEND_URL || '').trim();
   if (process.env.VERCEL && !backendConfigured) {
     return NextResponse.json(
-      { success: false, error: 'Vercel cannot reliably run download jobs directly. Deploy the Dockerfile to Render and set DOWNLOADER_BACKEND_URL in Vercel.' },
+      {
+        success: false,
+        error: VERCEL_NO_BACKEND_MESSAGE,
+        developerNote: VERCEL_NO_BACKEND_NOTE,
+        // Lets the UI offer a working alternative instead of only showing a dead end.
+        alternativeUrl: workingSiteUrl(),
+      },
       { status: 503 }
     );
   }

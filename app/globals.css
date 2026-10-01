@@ -481,6 +481,26 @@ a {
 .resource-list { margin: 12px 0 0; padding-left: 18px; }
 
 .resource-list a { color: #ffd3c6; font-weight: 700; }
+/* Shown when the host cannot download at all (a UI-only deployment). The sentence above
+   it explains why, so this button is the one action that still works - styled as a
+   button because tapping it is the whole point of the message. */
+.fallback-line { margin: 14px 0 0; }
+
+.fallback-link {
+  display: inline-block;
+  padding: 11px 18px;
+  border: 1px solid rgba(72, 226, 184, 0.4);
+  border-radius: 12px;
+  background: rgba(72, 226, 184, 0.12);
+  color: var(--mint);
+  font-size: 0.84rem;
+  font-weight: 800;
+  text-decoration: none;
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+
+.fallback-link:hover { background: rgba(72, 226, 184, 0.2); transform: translateY(-1px); }
+
 
 /* Ready card */
 .result-box {

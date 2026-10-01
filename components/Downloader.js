@@ -39,6 +39,10 @@ export default function Downloader() {
   const [videoData, setVideoData] = useState(null);
   const [detectedPlatform, setDetectedPlatform] = useState(null);
   const [resources, setResources] = useState([]);
+  // When this deployment cannot run downloads at all (a UI-only host such as Vercel), the
+  // API sends the working site address so the visitor gets somewhere to go instead of a
+  // dead end. Null whenever the current host can actually download.
+  const [fallbackUrl, setFallbackUrl] = useState(null);
   const [progress, setProgress] = useState(null);
   const [mode, setMode] = useState('video');
   // Frozen for the lifetime of one run. A React state value can change mid-download,
@@ -79,6 +83,7 @@ export default function Downloader() {
     setVideoData(null);
     setResources([]);
     setMessage('');
+    setFallbackUrl(null);
   };
 
   const showReady = (data) => {
@@ -209,7 +214,14 @@ export default function Downloader() {
       if (!response.ok && !data.error) throw new Error('Failed to process video');
       if (data.jobId) { pollJob(data.jobId); return; }
       if (data.success && data.videoUrl) { showReady(data); }
-      else { setStatus('error'); setMessage(data.error || 'This video is not available for direct download.'); setResources(data.resources || []); }
+      else {
+        setStatus('error');
+        setMessage(data.error || 'This video is not available for direct download.');
+        setResources(data.resources || []);
+        // Only an http(s) address is rendered, so a misconfigured value can never turn
+        // into a clickable javascript:/data: link.
+        setFallbackUrl(/^https?:\/\//i.test(data.alternativeUrl || '') ? data.alternativeUrl : null);
+      }
     } catch (error) { setStatus('error'); setMessage(error.message || 'An error occurred. Please try again.'); }
   };
 
@@ -280,7 +292,7 @@ export default function Downloader() {
           </div>
         </div>
       )}
-      {status === 'error' && <div className="status-box error" role="alert"><p className="status-heading">Download unavailable</p><p>{message}</p>{resources.length > 0 && <ul className="resource-list">{resources.map((resource) => <li key={resource.url}><a href={resource.url} target="_blank" rel="noopener noreferrer">{resource.label}</a></li>)}</ul>}</div>}
+      {status === 'error' && <div className="status-box error" role="alert"><p className="status-heading">Download unavailable</p><p>{message}</p>{fallbackUrl && <p className="fallback-line"><a className="fallback-link" href={fallbackUrl} target="_blank" rel="noopener noreferrer">Open the working download site</a></p>}{resources.length > 0 && <ul className="resource-list">{resources.map((resource) => <li key={resource.url}><a href={resource.url} target="_blank" rel="noopener noreferrer">{resource.label}</a></li>)}</ul>}</div>}
       {status === 'success' && videoData && (
         <div className="result-box">
           <div className="result-row">
