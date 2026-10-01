@@ -232,6 +232,22 @@ const probeFfmpeg = async () => {
 
 const FFMPEG_HINT = ' Install ffmpeg (Windows: winget install Gyan.FFmpeg, macOS: brew install ffmpeg) and restart the server to unlock the best quality.';
 
+// yt-dlp shells out to a JS runtime to answer YouTube's signature challenge. The lookup is
+// cached because it only depends on what is installed on the host, and probing runs a
+// child process that is not worth repeating on every download.
+let jsRuntimeCache = null;
+const probeRuntime = async () => {
+  if (jsRuntimeCache) return jsRuntimeCache;
+  const candidates = [
+    { name: 'node', executable: process.execPath },
+    { name: 'deno', executable: 'deno' },
+  ];
+  jsRuntimeCache = candidates.find(({ executable }) => (
+    spawnSync(executable, ['--version'], { windowsHide: true, timeout: 10000 }).status === 0
+  )) || null;
+  return jsRuntimeCache;
+};
+
 // TikTok actively screens the connecting network, so the failure copy says what to do.
 const TIKTOK_HINT = ' TikTok also screens the network it is asked from: hosting providers and some regions are refused outright, while a TIKTOK_COOKIES_FILE exported from a signed-in browser, or running this app on a home connection, usually gets through.';
 const needsTiktokHint = (message) => /blocked|cookies|login|logged in|unsupported url|region|403/i.test(message);
@@ -480,9 +496,14 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
   // TikTok can hide posts behind a region or login check. A Netscape cookies.txt
   // exported from a signed-in browser is the supported way past that - nothing is
   // bypassed, the request is simply made as the account that already can see it.
-  const cookiesFile = platform === 'tiktok' ? String(process.env.TIKTOK_COOKIES_FILE || '').trim() : '';
+  const cookiesFile = String(
+    (platform === 'tiktok' ? process.env.TIKTOK_COOKIES_FILE : '')
+    || (platform === 'youtube' ? process.env.YOUTUBE_COOKIES_FILE : '')
+    || ''
+  ).trim();
+  const cookiePlatform = platform === 'tiktok' ? 'TikTok' : 'YouTube';
   if (cookiesFile && !(await fs.access(cookiesFile).then(() => true).catch(() => false))) {
-    return failJob(job, `The TikTok cookies file "${cookiesFile}" could not be read. Point TIKTOK_COOKIES_FILE at a cookies.txt exported from a signed-in browser, or leave it empty.`, [], 503);
+    return failJob(job, `The ${cookiePlatform} cookies file "${cookiesFile}" could not be read. Point the cookies setting at a cookies.txt exported from a signed-in browser, or leave it empty.`, [], 503);
   }
 
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'komyosys-'));
@@ -500,6 +521,21 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
     ...(ffmpeg.location ? ['--ffmpeg-location', ffmpeg.location] : []),
   ];
 
+  // YouTube now signs its streams with a JavaScript challenge. Without a JS runtime to
+  // solve it, yt-dlp can only return the handful of formats that do not need one, and
+  // frequently no formats at all. Node is already a dependency of this app, so it is
+  // offered as the solver and deno is accepted too when an operator installs it.
+  const jsArgs = [];
+  const runtime = await probeRuntime();
+  if (runtime) jsArgs.push('--js-runtimes', `${runtime.name}:${runtime.executable}`);
+
+  // YouTube picks a player client per request and periodically refuses the one yt-dlp
+  // defaults to ("Sign in to confirm you're not a bot"), so a refusal is retried with the
+  // next client instead of failing the job outright. These are the clients that still
+  // answer without cookies as of this release; ios/web_safari/tv are deliberately left
+  // out because YouTube rejects them outright.
+  const youtubeClients = ['default', 'android', 'mweb', 'web_embedded'];
+
   // YouTube's CDN throttles long transfers from one IP and answers a burst of range
   // requests with `HTTP Error 403: Forbidden` partway through a stream. Asking for a
   // single fragment at a time keeps the request rate low enough to get past it, and
@@ -511,12 +547,39 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
     '--retry-sleep', 'linear=1::5',
   ];
 
-  const infoError = await fetchInfo(job, [...baseArgs, '-J', '--no-progress', '--', requestUrl]);
-  const run = await runWithRetry(
+  // A refusal that a different YouTube player client can still answer is retried with that
+// client; anything else is a real failure and is reported as-is.
+const CLIENT_REFUSAL = /sign in to confirm|confirm you'?re not a bot|429|too many requests|requested format is not available/i;
+
+  const attemptArgs = (client) => [
+    ...baseArgs,
+    ...jsArgs,
+    ...(client ? ['--extractor-args', `youtube:player_client=${client}`] : []),
+  ];
+
+  // Metadata is fetched first so the UI can show the title, thumbnail and duration straight
+  // away. It is only used for display, so a failure here does not stop the download.
+  const infoError = await fetchInfo(job, [...attemptArgs(null), '-J', '--no-progress', '--', requestUrl]);
+  let run = await runWithRetry(
     job,
-    [...baseArgs, ...throttleArgs, '-o', outputTemplate, '--', requestUrl],
+    [...attemptArgs(null), ...throttleArgs, '-o', outputTemplate, '--', requestUrl],
     directory,
   );
+
+  if (!run.ok && platform === 'youtube' && CLIENT_REFUSAL.test(run.message || '')) {
+    for (const client of youtubeClients) {
+      const retry = await runWithRetry(
+        job,
+        [...attemptArgs(client), ...throttleArgs, '-o', outputTemplate, '--', requestUrl],
+        directory,
+      );
+      if (retry.ok) {
+        run = retry;
+        break;
+      }
+      providerError = retry.message || providerError;
+    }
+  }
 
   if (run.ok) {
     const files = (await fs.readdir(directory)).filter((file) => (
@@ -633,13 +696,19 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
   // A short share link only reveals that it points at a photo post once TikTok has redirected
   // it and yt-dlp has refused it, so the same explanation is repeated here rather than letting
   // the raw "Unsupported URL" reach the user.
+  // When YouTube has flagged the host's IP it refuses every player client, and the only real
+// fix is to make the request as a signed-in account. Saying so beats echoing the raw
+// "Sign in to confirm you're not a bot" that yt-dlp returns.
+const YOUTUBE_BOT_HINT = ' YouTube has rate limited this network and is now asking every request to prove it is not a bot. Waiting a while helps, and for repeated use a YOUTUBE_COOKIES_FILE pointing at a cookies.txt exported from a signed-in browser gets through.';
+
   const unsupported = /unsupported url/i.test(providerError || '');
   const photoPost = platform === 'tiktok' && (isPhotoPostUrl(requestUrl) || unsupported);
+  const botChecked = platform === 'youtube' && CLIENT_REFUSAL.test(providerError || '');
 
   failJob(job, photoPost
     ? PHOTO_POST_MESSAGE
     : providerError
-      ? `The video could not be downloaded: ${providerError.replace(/^ERROR:\s*/, '').slice(0, 240)}${platform === 'youtube' && ffmpegMissing ? FFMPEG_HINT : ''}${platform === 'tiktok' && needsTiktokHint(providerError) ? TIKTOK_HINT : ''}`
+      ? `The video could not be downloaded: ${providerError.replace(/^ERROR:\s*/, '').slice(0, 240)}${botChecked ? YOUTUBE_BOT_HINT : ''}${platform === 'youtube' && ffmpegMissing ? FFMPEG_HINT : ''}${platform === 'tiktok' && needsTiktokHint(providerError) ? TIKTOK_HINT : ''}`
     : platform === 'youtube'
       ? `YouTube did not return a downloadable file for this link. The video may be private, age-restricted, region locked, or a live stream.${ffmpegMissing ? FFMPEG_HINT : ''}`
       : platform === 'tiktok'

@@ -45,6 +45,13 @@ export async function GET() {
     ? false
     : spawnSync('ffmpeg', ['-version'], { windowsHide: true }).status === 0;
   const ffmpeg = bundledFfmpeg || systemFfmpeg;
+  // YouTube needs a JavaScript runtime to answer its signature challenge. Reported because
+  // a missing one is the difference between a download working and YouTube returning none.
+  const jsRuntime = spawnSync(process.execPath, ['--version'], { windowsHide: true }).status === 0
+    ? `node ${process.version}`
+    : spawnSync('deno', ['--version'], { windowsHide: true }).status === 0
+      ? 'deno'
+      : null;
 
   return NextResponse.json({
     ok: ytdlp,
@@ -53,9 +60,12 @@ export async function GET() {
       ytdlp,
       ffmpeg,
       ffmpegSource: bundledFfmpeg ? 'bin' : systemFfmpeg ? 'PATH' : 'missing',
+      jsRuntime,
     },
     hint: ytdlp
-      ? 'Downloads can run here.'
+      ? jsRuntime
+        ? 'Downloads can run here.'
+        : 'Downloads can run here, but YouTube will return no formats until a JavaScript runtime (node or deno) is installed.'
       : 'bin/yt-dlp is missing from this runtime, so downloads cannot start on this host. Vercel cannot run child-process binaries - deploy the Dockerfile to a persistent host instead.',
   });
 }
