@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import Downloader from '../components/Downloader';
 import HistoryPanel from '../components/HistoryPanel';
 
@@ -25,10 +26,10 @@ export default function Home() {
   return (
     <main className="site-shell">
       <header className="site-header">
-        <a className="brand" href="/" aria-label="KOMYOSYS home">
+        <Link className="brand" href="/" aria-label="KOMYOSYS home">
           <span className="brand-mark">K</span>
           <span>KOMYOSYS / MEDIA DESK</span>
-        </a>
+        </Link>
         <span className="header-note">Responsible access only</span>
       </header>
 
