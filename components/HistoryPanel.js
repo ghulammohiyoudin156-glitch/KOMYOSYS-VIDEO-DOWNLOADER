@@ -86,7 +86,7 @@ export default function HistoryPanel() {
               <VideoThumb entry={entry} className="card-thumb" />
               <div className="card-body">
                 <p className="card-title" title={entry.title}>{entry.title}</p>
-                <p className="card-meta">{metaOf(entry.platform).name} · {entry.sizeText || 'size not reported'} · {formatRelative(entry.at)}</p>
+                <p className="card-meta">{[metaOf(entry.platform).name, entry.kind === 'audio' ? 'audio' : '', entry.sizeText || 'size not reported', formatRelative(entry.at)].filter(Boolean).join(' · ')}</p>
                 <div className="card-actions">
                   <button className="link-button" type="button" onClick={() => requestRefill(entry.url)}>Again</button>
                   <a className="link-button" href={entry.url} target="_blank" rel="noopener noreferrer">Open</a>

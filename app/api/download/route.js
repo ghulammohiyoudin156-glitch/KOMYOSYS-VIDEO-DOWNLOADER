@@ -42,10 +42,13 @@ const PERCENT_LINE = /^\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+)\s*(B|KiB|Mi
 const FINISHED_LINE = /^\[download\]\s+100%\s+of\s+~?\s*([\d.]+)\s*(B|KiB|MiB|GiB)\s+in\s+/;
 const SPEED_LINE = /\bat\s+([\d.]+)\s*(B|KiB|MiB|GiB)\/s\s+ETA\s+(\S+)/;
 
-const createJob = (platform) => {
+const createJob = (platform, mode = 'video') => {
   const job = {
     id: crypto.randomUUID(),
     platform,
+    // 'audio' means the visitor asked for the sound track only, so the run never
+    // requests a video stream and the result is an .mp3 instead of an .mp4.
+    mode: mode === 'audio' ? 'audio' : 'video',
     status: 'queued',
     stage: 'Waiting to start...',
     percent: 0,
@@ -104,7 +107,11 @@ const failJob = (job, error, resources = [], httpStatus = 400) => {
 // YouTube usually downloads two streams, so the label says which one is moving
 // right now instead of implying the whole download started over.
 const streamStage = (job) => {
-  const kind = job.platform === 'youtube' ? (job.stream > 0 ? 'audio' : 'video') : 'media';
+  // In audio mode the single downloaded file IS the sound track, so calling it "media"
+  // would be needlessly vague; the visitor chose audio and is told so throughout.
+  const kind = job.mode === 'audio'
+    ? 'audio'
+    : job.platform === 'youtube' ? (job.stream > 0 ? 'audio' : 'video') : 'media';
   return job.expectedFiles > 1
     ? `Downloading ${kind} (${job.stream + 1} of ${job.expectedFiles})...`
     : `Downloading ${kind}...`;
@@ -153,6 +160,9 @@ const readProgressLine = (job, line) => {
 const jobSnapshot = (job) => ({
   jobId: job.id,
   platform: job.platform,
+  // Echoed back so the browser can confirm it is showing progress for the mode the
+  // visitor actually picked, not a leftover from a previous run.
+  mode: job.mode,
   status: job.status,
   stage: job.stage,
   percent: Math.round(job.percent * 10) / 10,
@@ -378,6 +388,19 @@ const videoFormat = (platform, ffmpegAvailable) => {
   ].join('/');
 };
 
+// "Only audio" mode. The best available audio-only stream is taken and, when ffmpeg is
+// present, re-encoded to MP3 at a high quality bitrate so the file opens everywhere.
+// Without ffmpeg the best single audio file is returned untouched (usually .m4a/.opus),
+// because a conversion cannot be done - an untouched file is better than a failed job.
+const audioFormat = (ffmpegAvailable) => {
+  if (!ffmpegAvailable) return 'ba[ext=m4a]/ba[ext=webm]/b[ext=m4a]/ba/b';
+  return 'bestaudio/b';
+};
+
+// The extra yt-dlp switches that turn a downloaded audio stream into an .mp3. Only safe
+// to pass when ffmpeg exists, hence the guard at the call site.
+const audioConversionArgs = ['-x', '--audio-format', 'mp3', '--audio-quality', '0'];
+
 // Turns `My Title [dQw4w9WgXcQ].mp4` into `My Title.mp4` for a readable label in the UI.
 // The `[id]` block is only stripped when it really sits directly before the extension;
 // a title that legitimately contains brackets keeps them instead of being mangled.
@@ -502,7 +525,10 @@ export async function POST(request) {
         { status: 400 }
       );
     }
-    const { url } = body || {};
+    // 'audio' asks for the sound track only. Anything else - including an older client
+    // that sends no mode at all - keeps the original video behaviour, so the change is
+    // backwards compatible with the frontend that is already deployed.
+    const { url, mode } = body || {};
 
     if (!url || typeof url !== 'string') {
       return NextResponse.json(
@@ -510,6 +536,8 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+
+    const wantedMode = mode === 'audio' ? 'audio' : 'video';
 
     const trimmedUrl = url.trim();
     // Accept links pasted without a protocol (youtube.com/watch?v=...).
@@ -545,13 +573,13 @@ export async function POST(request) {
       );
     }
 
-    const job = createJob(platform);
-    void runJob(job, { requestUrl, platform, trimmedUrl }).catch((error) => {
+    const job = createJob(platform, wantedMode);
+    void runJob(job, { requestUrl, platform, trimmedUrl, mode: wantedMode }).catch((error) => {
       console.error('Download job failed unexpectedly:', error);
       failJob(job, 'The download could not be completed due to a server error. Please try again.', [], 500);
     });
 
-    return NextResponse.json({ success: true, jobId: job.id, platform });
+    return NextResponse.json({ success: true, jobId: job.id, platform, mode: wantedMode });
   } catch (error) {
     console.error('Download API error:', error);
     return NextResponse.json(
@@ -562,8 +590,14 @@ export async function POST(request) {
 }
 
 // Does the slow work in the background, recording progress on the job so the UI can poll it.
-const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
+const runJob = async (job, { requestUrl, platform, trimmedUrl, mode = 'video' }) => {
+  // Single switch that decides what this run produces. Read once at the top so every
+  // branch below (format, args, file matching, error copy) stays consistent.
+  const audioOnly = mode === 'audio';
   let providerError = '';
+  // Extra context collected during the run and only worth showing if the download failed, so
+  // a successful download is never annotated with a warning the user has to act on.
+  let providerNote = '';
   let ffmpegMissing = false;
   // Set when a browser holding a signed-in session was open, which is the one case where
   // the fix is on the user's side: quitting the browser frees the cookie store. The same is
@@ -595,7 +629,7 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
     facebook: ['FACEBOOK_COOKIES_FILE', 'COOKIES_FILE'],
   };
 
-  const cookieFile = COOKIE_ENV_BY_PLATFORM[platform]
+  let cookieFile = COOKIE_ENV_BY_PLATFORM[platform]
     .map((name) => String(process.env[name] || '').trim())
     .find(Boolean) || '';
 
@@ -603,26 +637,40 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
   // set an environment variable and restart the server just to get Instagram or Facebook
   // working. The Downloads folder and the project folder are where an exported file
   // realistically lands, so those are checked before giving up.
+  // A cookies.txt that was exported for one platform can sit in a folder of its own, so the
+  // conventional locations inside the project are checked too. This runs even when an
+  // environment variable is set, because the variable points at a file that may not exist yet.
   const autoCookieFiles = [
     path.join(process.cwd(), 'cookies.txt'),
+    path.join(process.cwd(), 'cookies', 'instagram-facebook.txt'),
+    path.join(process.cwd(), 'cookies', 'cookies.txt'),
     path.join(os.homedir(), 'Downloads', 'cookies.txt'),
     path.join(os.homedir(), 'Desktop', 'cookies.txt'),
   ];
+  const cookiePlatform = platform.charAt(0).toUpperCase() + platform.slice(1);
+  const readable = (candidate) => fs.access(candidate).then(() => true).catch(() => false);
   let cookieFileMissing = false;
+  if (cookieFile && !(await readable(cookieFile))) {
+    // The setting points at a file that is not there. That is a setup mistake, not a reason to
+    // refuse the download: a public post is still readable without a session, so the path is
+    // dropped and yt-dlp is asked anyway. If the post really is login-walled, the failure
+    // message below already explains how to supply a cookies.txt.
+    cookieFileMissing = true;
+    cookieFile = '';
+  }
   if (!cookieFile) {
     for (const candidate of autoCookieFiles) {
-      if (await fs.access(candidate).then(() => true).catch(() => false)) {
+      if (await readable(candidate)) {
         cookieFile = candidate;
         break;
       }
     }
-  } else if (!(await fs.access(cookieFile).then(() => true).catch(() => false))) {
-    cookieFileMissing = true;
   }
 
-  const cookiePlatform = platform.charAt(0).toUpperCase() + platform.slice(1);
+  // A configured-but-absent cookies file is worth mentioning only when the download then
+  // fails, so the note rides along with the error instead of standing in front of it.
   if (cookieFileMissing) {
-    return failJob(job, `The ${cookiePlatform} cookies file "${cookieFile}" could not be read. Point the cookies setting at a cookies.txt exported from a signed-in browser, or leave it empty.`, [], 503);
+    providerNote = ` The ${cookiePlatform} cookies file was not found, so the download was attempted without a signed-in session. Public posts still work; a login-walled post needs a cookies.txt exported from a signed-in browser.`;
   }
 
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'komyosys-'));
@@ -635,7 +683,10 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl }) => {
     '--socket-timeout', '30',
     '--max-filesize', '500M',
     '--newline',
-    '-f', videoFormat(platform, ffmpeg.available),
+    '-f', audioOnly ? audioFormat(ffmpeg.available) : videoFormat(platform, ffmpeg.available),
+    // Converting to MP3 is an ffmpeg job. Asking for it without ffmpeg would turn a
+    // perfectly good audio download into an error, so it is only added when possible.
+    ...(audioOnly && ffmpeg.available ? audioConversionArgs : []),
     ...(cookieFile ? ['--cookies', cookieFile] : []),
     ...(ffmpeg.location ? ['--ffmpeg-location', ffmpeg.location] : []),
   ];
@@ -740,10 +791,20 @@ const CLIENT_REFUSAL = /sign in to confirm|confirm you'?re not a bot|429|too man
   }
 
   if (run.ok) {
+    // An audio-only run produces .mp3 (or the untouched .m4a/.opus/.webm when ffmpeg is
+    // missing), so the video-only extension list would report "no file was produced" for a
+    // download that actually succeeded. Both lists are therefore matched on mode.
+    const VIDEO_EXTENSIONS = /\.(mp4|webm|mkv|mov|avi)$/i;
+    const AUDIO_EXTENSIONS = /\.(mp3|m4a|opus|aac|flac|wav|ogg|weba)$/i;
     const files = (await fs.readdir(directory)).filter((file) => (
-      /\.(mp4|webm|mkv|mov|avi)$/i.test(file)
+      (audioOnly ? AUDIO_EXTENSIONS : VIDEO_EXTENSIONS).test(file)
     ));
-    if (files[0]) {
+    // A photo post has no audio track at all, so in audio mode that is a real, explainable
+    // outcome rather than a mysterious "no file" failure.
+    const noAudioAtAll = audioOnly && !files.length && (await fs.readdir(directory)).some((file) => VIDEO_EXTENSIONS.test(file));
+    if (noAudioAtAll) {
+      providerError = 'This post has no sound track, so there is no audio file to download. Switch back to video to save it instead.';
+    } else if (files[0]) {
       const token = crypto.randomUUID();
       const saved = await fs.stat(path.join(directory, files[0])).catch(() => null);
       readyDownloads.set(token, { directory, file: files[0] });
@@ -753,14 +814,28 @@ const CLIENT_REFUSAL = /sign in to confirm|confirm you'?re not a bot|429|too man
         title: displayTitle(files[0]),
         filename: files[0],
         platform,
+        // Lets the UI label the result honestly: an audio save shows audio wording and an
+        // audio icon, a video save keeps the existing video presentation.
+        kind: audioOnly ? 'audio' : 'video',
+        mode,
+        extension: path.extname(files[0]).replace('.', '').toLowerCase(),
         thumbnail: job.thumbnail,
         duration: job.duration,
-        quality: job.quality,
+        // A height means nothing for an audio file, so the mode is named instead. The
+        // frontend falls back to showing the extension when this is blank.
+        quality: audioOnly ? '' : job.quality,
         sizeText: saved ? formatBytes(saved.size) : '',
         sizeBytes: saved ? saved.size : job.totalBytes,
       });
     }
-    providerError = 'No video file was produced. The selected media may be audio-only.';
+    // Only reached when the run succeeded but produced nothing matching the expected
+    // extension. The wording follows the mode so an audio attempt is never told about a
+    // missing "video" file, and an already-recorded reason (a silent photo post) is kept.
+    if (!providerError) {
+      providerError = audioOnly
+        ? 'No audio file was produced for this link. The post may be silent, or the source may have withdrawn the sound track.'
+        : 'No video file was produced. The selected media may be audio-only.';
+    }
     await fs.rm(directory, { recursive: true, force: true });
   } else {
     providerError = String(run.message || '').split('\n').filter(Boolean).pop() || infoError;
@@ -894,12 +969,17 @@ const sessionHint = browserWasUndecryptable
   // The login hint ends with "close your browser", which is useless once the cookie store has
   // proven unreadable. In that case the account is irrelevant and the message is replaced
   // rather than appended, so the two never contradict each other.
-  const loginHint = browserWasUndecryptable || browserWasLocked ? '' : LOGIN_HINT;
+  // When the cookies file itself is missing there is no session to reuse, so neither the
+  // "sign in" wording nor the "close the browser" tip can help. providerNote already says
+  // what is actually wrong and what to do about it, and stacking the other two on top only
+  // buries it.
+  const loginHint = providerNote || browserWasUndecryptable || browserWasLocked ? '' : LOGIN_HINT;
+  const showSessionHint = !providerNote && !browserWasUndecryptable;
 
   failJob(job, photoPost
     ? PHOTO_POST_MESSAGE
     : providerError
-      ? `The video could not be downloaded: ${cleanReason(providerError)}${botChecked ? YOUTUBE_BOT_HINT : ''}${loginNeeded ? loginHint : ''}${sessionHint}${platform === 'youtube' && ffmpegMissing ? FFMPEG_HINT : ''}${platform === 'tiktok' && needsTiktokHint(providerError) ? TIKTOK_HINT : ''}`
+      ? `The video could not be downloaded: ${cleanReason(providerError)}${providerNote}${botChecked ? YOUTUBE_BOT_HINT : ''}${loginNeeded ? loginHint : ''}${showSessionHint ? sessionHint : ''}${platform === 'youtube' && ffmpegMissing ? FFMPEG_HINT : ''}${platform === 'tiktok' && needsTiktokHint(providerError) ? TIKTOK_HINT : ''}`
     : platform === 'youtube'
       ? `YouTube did not return a downloadable file for this link. The video may be private, age-restricted, region locked, or a live stream.${ffmpegMissing ? FFMPEG_HINT : ''}`
       : platform === 'tiktok'
@@ -982,6 +1062,16 @@ export async function GET(request) {
     '.mov': 'video/quicktime',
     '.mp4': 'video/mp4',
     '.webm': 'video/webm',
+    // Audio-only saves. `.m4a`/`.opus`/`.aac` appear when ffmpeg is unavailable and the
+    // best ready-made audio stream is returned untouched instead of being converted.
+    '.mp3': 'audio/mpeg',
+    '.m4a': 'audio/mp4',
+    '.aac': 'audio/aac',
+    '.opus': 'audio/opus',
+    '.ogg': 'audio/ogg',
+    '.weba': 'audio/webm',
+    '.flac': 'audio/flac',
+    '.wav': 'audio/wav',
   };
   const contentType = contentTypes[path.extname(item.file).toLowerCase()] || 'application/octet-stream';
 

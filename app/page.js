@@ -40,7 +40,7 @@ export default function Home() {
           <div className="signal-row" aria-label="Service principles">
             <span className="signal">YouTube + TikTok + IG + FB</span>
             <span className="signal">Public links</span>
-            <span className="signal">MP4 preferred</span>
+            <span className="signal">MP4 or MP3</span>
             <span className="signal">No login bypass</span>
           </div>
         </div>
