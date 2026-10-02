@@ -96,8 +96,7 @@ a {
 
 .site-header,
 .hero-grid,
-.history-section,
-.site-footer {
+.history-section {
   width: min(1160px, calc(100% - 40px));
   margin: 0 auto;
 }
@@ -133,30 +132,6 @@ a {
   font-size: 1.2rem;
   letter-spacing: 0;
   box-shadow: 0 10px 26px rgba(72, 226, 184, 0.28);
-}
-
-.header-note {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 14px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.header-note::before {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--mint);
-  box-shadow: 0 0 0 4px rgba(72, 226, 184, 0.16);
-  content: '';
 }
 
 .hero-grid {
@@ -215,18 +190,8 @@ a {
   font-size: 1.05rem;
 }
 
-.signal-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 34px; }
-
-.signal {
-  padding: 8px 14px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  color: #cddbe6;
-  font-size: 0.74rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
+.supported-platforms { margin-top: 24px; color: #cddbe6; font-size: 0.9rem; font-weight: 600; }
+.supported-platforms span { padding: 0 5px; color: var(--muted); }
 
 /* Downloader card */
 .download-panel {
@@ -247,18 +212,14 @@ a {
   content: '';
 }
 
-.panel-kicker { color: var(--coral); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.2em; text-transform: uppercase; }
-
 .panel-title {
-  margin-top: 10px;
+  margin-top: 0;
   color: var(--text);
   font-family: Georgia, 'Times New Roman', serif;
   font-size: 1.9rem;
   font-weight: 500;
   letter-spacing: -0.02em;
 }
-
-.panel-description { margin-top: 12px; color: var(--muted); font-size: 0.92rem; }
 
 .url-label {
   display: block;
@@ -697,15 +658,6 @@ a {
 
 .chip.platform { border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); }
 
-.featured-source {
-  overflow: hidden;
-  margin-top: 14px;
-  color: #74889c;
-  font-size: 0.74rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .featured-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 22px; }
 
 .chip-button {
@@ -782,26 +734,15 @@ input:focus-visible {
 
 .link-button.danger { color: var(--coral); margin-left: auto; }
 
-.site-footer {
-  display: flex; flex-wrap: wrap; gap: 10px 26px; justify-content: space-between;
-  padding: 26px 0 40px;
-  border-top: 1px solid var(--line);
-  color: #7f8f9f;
-  font-size: 0.76rem;
-}
-
-.site-footer strong { color: var(--text); letter-spacing: 0.08em; }
-
 @media (max-width: 1000px) {
-  .hero-grid { grid-template-columns: 1fr; min-height: auto; padding: 34px 0 56px; }
+  .hero-grid { grid-template-columns: minmax(0, 1fr); min-height: auto; padding: 34px 0 56px; }
   .hero-copy { max-width: none; }
   .history-featured { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
-  .site-header, .hero-grid, .history-section, .site-footer { width: min(1160px, calc(100% - 30px)); }
+  .site-header, .hero-grid, .history-section { width: min(1160px, calc(100% - 30px)); }
   .site-header { padding: 20px 0; }
-  .header-note { display: none; }
   .hero-title { font-size: clamp(2.6rem, 12vw, 3.6rem); }
   .download-panel { border-radius: 22px; }
   .history-head { flex-direction: column; align-items: flex-start; }

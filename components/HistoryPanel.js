@@ -36,12 +36,12 @@ export default function HistoryPanel() {
     <section className="history-section" aria-labelledby="history-title">
       <div className="history-head">
         <div>
-          <p className="eyebrow">Saved on this device only</p>
-          <h2 id="history-title" className="section-title">Your download history</h2>
+          <p className="eyebrow">On this device</p>
+          <h2 id="history-title" className="section-title">Download history</h2>
         </div>
         {entries.length > 0 && (
           <div className="history-actions">
-            <span className="count-chip">{entries.length} {entries.length === 1 ? 'video' : 'videos'}</span>
+            <span className="count-chip">{entries.length} {entries.length === 1 ? 'item' : 'items'}</span>
             <button className="ghost-button" type="button" onClick={() => { if (window.confirm('Clear the whole history from this browser?')) clearHistory(); }}>Clear all</button>
           </div>
         )}
@@ -50,8 +50,8 @@ export default function HistoryPanel() {
       {mounted && entries.length === 0 && (
         <div className="history-empty">
           <span className="empty-mark" aria-hidden="true">▶</span>
-          <p className="empty-title">Nothing saved here yet</p>
-          <p className="empty-copy">Every finished download lands in this list with the link it came from, so you can always see which video you took last.</p>
+          <p className="empty-title">No downloads yet</p>
+          <p className="empty-copy">Recent downloads will appear here.</p>
         </div>
       )}
 
@@ -59,7 +59,7 @@ export default function HistoryPanel() {
         <article className="history-featured">
           <div className="featured-media">
             <VideoThumb entry={latest} className="featured-thumb" />
-            <span className="featured-badge">Last video you downloaded</span>
+            <span className="featured-badge">Latest download</span>
           </div>
           <div className="featured-body">
             <p className="featured-kicker">Saved {formatRelative(latest.at)}</p>
@@ -70,7 +70,6 @@ export default function HistoryPanel() {
               {formatDuration(latest.duration) ? <li className="chip">{formatDuration(latest.duration)}</li> : null}
               {latest.sizeText ? <li className="chip">{latest.sizeText}</li> : null}
             </ul>
-            <p className="featured-source" title={latest.url}>{latest.url}</p>
             <div className="featured-actions">
               <button className="primary-button compact" type="button" onClick={() => requestRefill(latest.url)}>Prepare this link again</button>
               <a className="chip-button" href={latest.url} target="_blank" rel="noopener noreferrer">Open source page</a>

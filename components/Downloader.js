@@ -246,10 +246,8 @@ export default function Downloader() {
 
   return (
     <div className="download-panel">
-      <p className="panel-kicker">Link workspace</p>
-      <h2 className="panel-title">Prepare your media</h2>
-      <p className="panel-description">Paste a public YouTube, TikTok, Instagram, or Facebook link below. We will check the source before preparing an authorized file.</p>
-      <label className="url-label" htmlFor="video-url">Video URL</label>
+      <h2 className="panel-title">Start a download</h2>
+      <label className="url-label" htmlFor="video-url">Media URL</label>
       <div className="url-input-wrap">
         <input id="video-url" ref={inputRef} className="url-input" type="url" value={url} onChange={handleInputChange} onKeyDown={handleKeyPress} placeholder={detectedPlatform ? EXAMPLE_URLS[detectedPlatform.key] : 'https://www.youtube.com/watch?v=...'} disabled={status === 'loading'} autoComplete="off" />
         <button className="utility-button" type="button" onClick={handlePaste} disabled={status === 'loading'}>Paste</button>
@@ -317,7 +315,7 @@ export default function Downloader() {
           <p className="result-history-note" role="status">Saved to your download history on this device.</p>
         </div>
       )}
-      <p className="panel-footnote">Only use links for content you own or have permission to save. Login walls, DRM, and private content are never bypassed.</p>
+      <p className="panel-footnote">Only download content you own or are authorized to save.</p>
     </div>
   );
 }
