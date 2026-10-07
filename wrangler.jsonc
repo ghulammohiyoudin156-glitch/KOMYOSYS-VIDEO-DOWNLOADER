@@ -1,10 +1,17 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "komyosys-video-downloader",
-  "main": "cloudflare/worker.js",
-  "compatibility_date": "2026-10-06",
-  "workers_dev": true,
-  "observability": {
-    "enabled": true
-  }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "komyosys-video-downloader",
+	"main": "cloudflare/worker.js",
+	"compatibility_date": "2026-10-06",
+	"workers_dev": true,
+	"observability": {
+		"enabled": true
+	},
+	"kv_namespaces": [
+		{
+			"binding": "KV",
+			"id": "13ba7fd330f743efa43cac185dcfa62b",
+			"remote": true
+		}
+	]
 }

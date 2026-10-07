@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { addHistoryEntry, metaOf, subscribeRefill } from '../lib/history';
+import { addHistoryEntry, metaOf, subscribeInputFocus, subscribeRefill } from '../lib/history';
 import VideoThumb from './VideoThumb';
 
 const PLATFORMS = {
@@ -45,6 +45,11 @@ export default function Downloader() {
   const [fallbackUrl, setFallbackUrl] = useState(null);
   const [progress, setProgress] = useState(null);
   const [mode, setMode] = useState('video');
+  // Flips to true for two seconds after the visitor copies the ready file's link.
+  const [copied, setCopied] = useState(false);
+  // Set when a hero platform chip asks for an example link. Only drives the placeholder,
+  // so it never overwrites what the visitor has already typed.
+  const [suggestedPlatform, setSuggestedPlatform] = useState(null);
   // Frozen for the lifetime of one run. A React state value can change mid-download,
   // and the result card must describe the file that was actually produced, not whatever
   // the switch happens to say afterwards.
@@ -68,6 +73,16 @@ export default function Downloader() {
     setTimeout(() => inputRef.current?.focus(), 260);
   }), []);
 
+  // A hero platform chip asks for the field: swap in that site's example link as the
+  // placeholder (the typed value is left alone) and jump the cursor to the input.
+  useEffect(() => subscribeInputFocus((platformKey) => {
+    if (status === 'loading') return;
+    setSuggestedPlatform(platformKey);
+    setStatus('idle');
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+    setTimeout(() => inputRef.current?.focus(), 260);
+  }), [status]);
+
   const stopPolling = () => {
     if (pollRef.current) {
       clearTimeout(pollRef.current);
@@ -84,6 +99,7 @@ export default function Downloader() {
     setResources([]);
     setMessage('');
     setFallbackUrl(null);
+    setCopied(false);
   };
 
   const showReady = (data) => {
@@ -246,14 +262,27 @@ export default function Downloader() {
 
   return (
     <div className="download-panel">
+      {/* Corner chip that floats on the card edge - decorative only. */}
+      <span className="panel-float-chip" aria-hidden="true">No sign-up</span>
+      {/* Decorative accents that state the card's promise at a glance - purely visual. */}
+      <ul className="panel-accents" aria-hidden="true">
+        <li>MP4</li>
+        <li>Audio</li>
+        <li>Secure</li>
+        <li>Fast</li>
+      </ul>
       <h2 className="panel-title">Start a download</h2>
       <label className="url-label" htmlFor="video-url">Media URL</label>
       <div className="url-input-wrap">
-        <input id="video-url" ref={inputRef} className="url-input" type="url" value={url} onChange={handleInputChange} onKeyDown={handleKeyPress} placeholder={detectedPlatform ? EXAMPLE_URLS[detectedPlatform.key] : 'https://www.youtube.com/watch?v=...'} disabled={status === 'loading'} autoComplete="off" />
+        <input id="video-url" ref={inputRef} className="url-input" type="url" value={url} onChange={handleInputChange} onKeyDown={handleKeyPress} placeholder={detectedPlatform ? EXAMPLE_URLS[detectedPlatform.key] : (suggestedPlatform && EXAMPLE_URLS[suggestedPlatform]) || 'https://www.youtube.com/watch?v=...'} disabled={status === 'loading'} autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} inputMode="url" aria-describedby="url-help" aria-invalid={status === 'error'} />
         <button className="utility-button" type="button" onClick={handlePaste} disabled={status === 'loading'}>Paste</button>
         <button className="clear-button" type="button" onClick={() => { setUrl(''); setDetectedPlatform(null); setStatus('idle'); resetResults(); }} disabled={!url || status === 'loading'}>Clear</button>
       </div>
-      {detectedPlatform && <p className="detected-platform">Detected {detectedPlatform.name}</p>}
+      {detectedPlatform ? (
+        <p className="detected-platform" id="url-help" role="status">Detected {detectedPlatform.name}</p>
+      ) : (
+        <p className="url-hint" id="url-help">Paste a link from the share menu of the app you copied it from.</p>
+      )}
       <div className="mode-row" role="radiogroup" aria-label="What to download">
         {Object.values(MODES).map((option) => (
           <button
@@ -273,24 +302,56 @@ export default function Downloader() {
         ))}
       </div>
       <button className="primary-button" type="button" onClick={handleDownload} disabled={status === 'loading' || !url.trim()}>
-        {status === 'loading' ? `Preparing ${MODES[mode].word}... ${Math.round(progress?.percent || 0)}%` : `Prepare ${MODES[mode].word} download`}
+        {status === 'loading' ? `Preparing ${MODES[mode].word}...` : `Prepare ${MODES[mode].word} download`}
       </button>
       {status === 'loading' && (
-        <div className="status-box" aria-live="polite">
+        <div className="status-box progress-box" aria-live="polite">
           <div className="progress-head">
             <span className="progress-stage">{progress?.stage || 'Checking the link and preparing your file...'}</span>
-            <strong className="progress-percent">{Math.round(progress?.percent || 0)}%</strong>
+            <strong className="progress-percent">{Math.round(progress?.percent || 0)}<span className="progress-percent-sign">%</span></strong>
           </div>
-          <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress?.percent || 0)}>
+          <div className="progress-track" role="progressbar" aria-label="Download progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress?.percent || 0)}>
             <div className="progress-fill" style={{ width: `${Math.max(progress?.percent || 0, 2)}%` }} />
           </div>
-          <div className="progress-meta">
-            <span>{progress?.downloaded && progress?.total ? `${progress.downloaded} of ${progress.total}` : `Reading the ${MODES[mode].word} info...`}</span>
-            <span>{progress?.speed ? `${progress.speed} · ${progress.eta ? `ETA ${progress.eta}` : 'almost done'}` : 'Longer videos can take a minute...'}</span>
-          </div>
+          {/* Speed, time left and byte counts live in their own labelled tiles so the
+              three numbers can be read at a glance instead of parsed out of one line. */}
+          <dl className="progress-stats">
+            <div className="progress-stat">
+              <dt>Speed</dt>
+              <dd>{progress?.speed || '—'}</dd>
+            </div>
+            <div className="progress-stat">
+              <dt>Time left</dt>
+              <dd>{progress?.eta || '—'}</dd>
+            </div>
+            <div className="progress-stat">
+              <dt>Downloaded</dt>
+              <dd>{progress?.downloaded && progress?.total ? `${progress.downloaded} / ${progress.total}` : 'Measuring...'}</dd>
+            </div>
+          </dl>
         </div>
       )}
-      {status === 'error' && <div className="status-box error" role="alert"><p className="status-heading">Download unavailable</p><p>{message}</p>{fallbackUrl && <p className="fallback-line"><a className="fallback-link" href={fallbackUrl} target="_blank" rel="noopener noreferrer">Open the working download site</a></p>}{resources.length > 0 && <ul className="resource-list">{resources.map((resource) => <li key={resource.url}><a href={resource.url} target="_blank" rel="noopener noreferrer">{resource.label}</a></li>)}</ul>}</div>}
+      {status === 'error' && (
+        <div className="status-box error" role="alert">
+          <div className="status-title-row">
+            <span className="status-icon" aria-hidden="true">!</span>
+            <p className="status-heading">Download unavailable</p>
+          </div>
+          <p className="status-message">{message}</p>
+          {fallbackUrl && (
+            <p className="fallback-line">
+              <a className="fallback-link" href={fallbackUrl} target="_blank" rel="noopener noreferrer">Open the working download site →</a>
+            </p>
+          )}
+          {resources.length > 0 && (
+            <ul className="resource-list">
+              {resources.map((resource) => (
+                <li key={resource.url}><a href={resource.url} target="_blank" rel="noopener noreferrer">{resource.label}</a></li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {status === 'success' && videoData && (
         <div className="result-box">
           <div className="result-row">
@@ -300,7 +361,10 @@ export default function Downloader() {
               ? <span className="result-audio-badge" aria-hidden="true">{videoData.extension.toUpperCase()}</span>
               : <VideoThumb entry={{ thumbnail: videoData.thumbnail, platform: videoData.platform }} className="result-thumb" />}
             <div>
-              <p className="result-heading">{videoData.kind === 'audio' ? 'Your audio is ready' : 'Your media is ready'}</p>
+              <p className="result-heading">
+                <span className="status-icon success" aria-hidden="true">✓</span>
+                {videoData.kind === 'audio' ? 'Your audio is ready' : 'Your media is ready'}
+              </p>
               <p className="result-title" title={videoData.title}>{videoData.title}</p>
               <p className="result-meta">{[metaOf(videoData.platform).name, videoData.quality, videoData.sizeText].filter(Boolean).join(' · ')}</p>
             </div>
@@ -308,11 +372,28 @@ export default function Downloader() {
           {/* Playing the track in the browser is a natural extra for an audio save, and it
               also proves the file really is playable before the visitor saves it. */}
           {videoData.kind === 'audio' && <audio className="result-audio-player" src={videoData.url} controls preload="none">Your browser cannot play this audio file. Use the save link below instead.</audio>}
-          <a className="download-link" href={videoData.url} target="_blank" rel="noopener noreferrer">
-            {videoData.kind === 'audio' ? `Save audio to this device` : `Save ${videoData.platform} file to this device`}
-          </a>
+          <div className="result-cta-row">
+            <a className="download-link" href={videoData.url} target="_blank" rel="noopener noreferrer">
+              {videoData.kind === 'audio' ? `Save audio to this device` : `Save ${videoData.platform} file to this device`}
+            </a>
+            <button
+              className={`copy-link-button${copied ? ' copied' : ''}`}
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(videoData.url);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                } catch {
+                  // Clipboard blocked - the save button above still works, so stay quiet.
+                }
+              }}
+            >
+              {copied ? 'Copied!' : 'Copy link'}
+            </button>
+          </div>
           <p className="result-note">This copy stays on the server for 10 minutes, then it is removed automatically.</p>
-          <p className="result-history-note" role="status">Saved to your download history on this device.</p>
+          <p className="result-history-note" role="status"><span aria-hidden="true">✓</span> Saved to your download history on this device.</p>
         </div>
       )}
       <p className="panel-footnote">Only download content you own or are authorized to save.</p>
