@@ -146,8 +146,8 @@ docker build -t komyosys-downloader .
 docker run --rm -p 3000:3000 komyosys-downloader   # then open /api/health
 ```
 
-That image is the deploy target for any persistent container host, and two hosts
-are pre-wired in this repo so there is nothing to configure:
+That image is the deploy target for any persistent container host, and several
+deployment targets are pre-wired in this repo:
 
 - **Render** - New > Blueprint on this repo. `render.yaml` selects the Dockerfile,
   pins one instance, uses `/api/health` as the health check, and prompts for the
@@ -155,18 +155,67 @@ are pre-wired in this repo so there is nothing to configure:
 - **Fly.io** - `fly launch` then `fly deploy`. `fly.toml` builds the same
   Dockerfile, pins the port to 3000 on both sides of the proxy, and checks
   `/api/health`.
+- **Cloudflare Workers Free** - `wrangler.jsonc` deploys a lightweight proxy
+  Worker in front of an existing downloader host. It does not run yt-dlp or ffmpeg.
+- **Oracle Cloud Always Free** - use an Ubuntu ARM64 Ampere A1 VM with Docker;
+  the Dockerfile installs FFmpeg and the yt-dlp installer selects the ARM64 build.
 - **Railway, a VPS, anywhere else** - build the image, or run
   `npm ci && npm run build && npm start` on a machine that has `ffmpeg` available.
 
-Each of them builds the image as-is, reads the injected `PORT`, and runs
-`next start` on `0.0.0.0`. The Dockerfile installs ffmpeg from apt (the code
-honours a system ffmpeg on `PATH`) and lets `npm install` fetch the matching Linux
-`yt-dlp` into `bin/`, so nothing Windows-specific from this machine is baked in.
+### Oracle Cloud Always Free VM
 
-Free tiers that suspend an idle instance are fine for trying this out, but they
-add a cold start to the first link after a quiet period, and the smallest tiers
-have little disk - a 1080p file plus its audio track can briefly need a few
-hundred MB while ffmpeg muxes them.
+Create an Always Free eligible Ubuntu ARM64 VM (Ampere A1) and assign it a public
+IP. In the VM's subnet security list, allow inbound TCP port 3000. Then run:
+
+```bash
+sudo apt update
+sudo apt install -y docker.io git
+sudo systemctl enable --now docker
+git clone https://github.com/ghulammohiyoudin156-glitch/KOMYOSYS-VIDEO-DOWNLOADER.git
+cd KOMYOSYS-VIDEO-DOWNLOADER
+sudo docker build -t komyosys-downloader .
+sudo docker run -d --name komyosys-downloader --restart unless-stopped -p 3000:3000 komyosys-downloader
+```
+
+Check `http://<VM_PUBLIC_IP>:3000/api/health`; continue only when `ok`,
+`engines.ytdlp`, and `engines.ffmpeg` are true. The Linux installer supports
+ARM64 `yt-dlp`; Debian installs the architecture-matched FFmpeg package. Once
+the Cloudflare Worker hostname is reachable, set its
+`DOWNLOADER_BACKEND_URL` secret to `http://<VM_PUBLIC_IP>:3000`, then set the
+Vercel production `DOWNLOADER_BACKEND_URL` to the Worker URL and redeploy. Keep
+the VM's port 3000 restricted to trusted traffic where possible. Oracle Always
+Free capacity depends on region availability and idle instances may be reclaimed.
+
+### Cloudflare Workers Free Proxy
+
+The standard Worker in this repo forwards requests to an existing downloader
+service. The Worker does not run yt-dlp or ffmpeg; the upstream service must
+already be deployed on a host that supports child processes and persistent job
+state. This avoids Cloudflare Containers and its Workers Paid plan requirement.
+
+First copy the current `DOWNLOADER_BACKEND_URL` value from the Vercel project.
+That value must be the actual downloader host, not this site's `vercel.app` URL.
+Then from the repo root, run:
+
+```powershell
+npm install
+npx wrangler login
+npx wrangler secret put DOWNLOADER_BACKEND_URL
+npx wrangler deploy
+```
+
+When Wrangler prompts for the secret value, paste the copied downloader host
+origin, for example `https://your-service.onrender.com`. After deploy, check
+`https://<worker-name>.<your-subdomain>.workers.dev/api/health` and confirm it
+reports `ok: true` with both engines available.
+
+Finally, in Vercel Project Settings > Environment Variables, change
+`DOWNLOADER_BACKEND_URL` to the deployed `workers.dev` origin, then redeploy the
+Vercel project. This routes Vercel's API requests through Cloudflare to the
+existing downloader host. Do not set the Worker upstream to the Vercel site or
+to the Worker URL itself; either creates a request loop. Cloudflare adds a proxy
+layer, but the downloader process and its temporary files remain on the upstream
+host, whose own availability and pricing still apply.
 
 Set the same variables as `.env.local` in the host's dashboard. For
 `TIKTOK_COOKIES_FILE`, mount the file rather than committing it, e.g.

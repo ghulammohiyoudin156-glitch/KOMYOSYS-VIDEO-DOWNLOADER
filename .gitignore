@@ -12,6 +12,7 @@ server.err
 server.err.log
 build.log
 .vercel
+.wrangler/
 .env*
 # Signed-in session cookies never belong in the repository.
 cookies/

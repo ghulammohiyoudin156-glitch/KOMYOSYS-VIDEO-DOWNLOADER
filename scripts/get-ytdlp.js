@@ -4,12 +4,18 @@ const path = require('path');
 const assets = {
   win32: 'yt-dlp.exe',
   darwin: 'yt-dlp_macos',
-  linux: 'yt-dlp_linux',
+  linux: {
+    x64: 'yt-dlp_linux',
+    arm64: 'yt-dlp_linux_aarch64',
+  },
 };
 
-const asset = assets[process.platform];
+const platformAssets = assets[process.platform];
+const asset = typeof platformAssets === 'string'
+  ? platformAssets
+  : platformAssets?.[process.arch];
 if (!asset) {
-  console.log('Unsupported OS. Install yt-dlp and add it to PATH.');
+  console.log(`Unsupported platform or architecture (${process.platform}/${process.arch}). Install yt-dlp and add it to PATH.`);
   process.exit(0);
 }
 
