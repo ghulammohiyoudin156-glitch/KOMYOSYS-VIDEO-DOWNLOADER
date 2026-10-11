@@ -829,7 +829,14 @@ const CLIENT_REFUSAL = /sign in to confirm|confirm you'?re not a bot|429|too man
     /not granting access|empty media response|login required|sign in|cannot parse data|unsupported url|private|restricted/i
       .test(String(message || ''))
   );
-  if (!run.ok && !cookieFile && ['instagram', 'facebook'].includes(platform) && needsLogin(run.message)) {
+  // LinkedIn answers many anonymous requests with an authwall instead of a login sentence,
+  // so a failed LinkedIn run is retried with any locally signed-in browser regardless of the
+  // exact error text - the same session-reuse mechanism Instagram and Facebook already use.
+  // Nothing is bypassed: the request is made as the account the operator already is, and a
+  // post that browser cannot see still fails cleanly. On a headless host (the Render
+  // container) no browsers are installed, so this costs nothing there; LINKEDIN_COOKIES_FILE
+  // (or the auto-discovered cookies.txt) remains the supported way to supply a session.
+  if (!run.ok && !cookieFile && ((['instagram', 'facebook'].includes(platform) && needsLogin(run.message)) || platform === 'linkedin')) {
     let browserLocked = false;
     let browserUndecryptable = false;
     for (const target of BROWSER_COOKIE_TARGETS) {
