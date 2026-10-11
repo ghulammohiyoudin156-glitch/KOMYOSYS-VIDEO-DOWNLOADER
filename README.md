@@ -1,7 +1,7 @@
 # KOMYOSYS Video Downloader
 
 Paste a public video link and the app prepares an MP4 you can save.
-Supported sources: **YouTube**, **TikTok**, **Instagram**, **Facebook**.
+Supported sources: **YouTube**, **TikTok**, **Instagram**, **Facebook**, **LinkedIn**.
 
 ## Run it
 
@@ -37,7 +37,7 @@ no API key or login for YouTube links.
 ## How a download works
 
 1. `components/Downloader.js` detects the platform from the pasted link
-   (YouTube, TikTok, Instagram, or Facebook) and posts it to `/api/download`.
+   (YouTube, TikTok, Instagram, Facebook, or LinkedIn) and posts it to `/api/download`.
 2. `app/api/download/route.js` validates the host, starts a background job and
    answers with a `jobId` straight away, so long downloads never hit a request
    timeout. The job runs yt-dlp into a temporary folder (max 500 MB, 10 minute

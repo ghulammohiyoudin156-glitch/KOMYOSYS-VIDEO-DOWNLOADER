@@ -7,6 +7,7 @@ const PLATFORMS = [
   { key: 'tiktok', label: 'TikTok' },
   { key: 'instagram', label: 'Instagram' },
   { key: 'facebook', label: 'Facebook' },
+  { key: 'linkedin', label: 'LinkedIn' },
 ];
 
 // Each chip is a shortcut, not a filter: it shows that site's example link in the

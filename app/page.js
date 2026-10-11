@@ -54,7 +54,7 @@ export default function Home() {
 
           {/* Trust bar stated as honest product facts - no invented reviews or counts. */}
           <ul className="hero-proof">
-            <li><span className="proof-value">4</span><span className="proof-label">Platforms</span></li>
+            <li><span className="proof-value">5</span><span className="proof-label">Platforms</span></li>
             <li><span className="proof-value">2</span><span className="proof-label">Formats</span></li>
             <li><span className="proof-value">10m</span><span className="proof-label">Auto-delete</span></li>
           </ul>
@@ -117,7 +117,7 @@ export default function Home() {
             <span className="step-number" aria-hidden="true">1</span>
             <div className="step-body">
               <h3 className="step-title">Copy your link</h3>
-              <p className="step-copy">Open the video on YouTube, TikTok, Instagram or Facebook and copy its share link.</p>
+              <p className="step-copy">Open the video on YouTube, TikTok, Instagram, Facebook or LinkedIn and copy its share link.</p>
             </div>
             <span className="step-tag">Share menu</span>
           </li>
@@ -148,7 +148,7 @@ export default function Home() {
         <div className="faq-list">
           <details className="faq-item">
             <summary>Which platforms are supported?</summary>
-            <p>YouTube, TikTok, Instagram and Facebook public links. Paste the link and the panel detects the platform automatically.</p>
+            <p>YouTube, TikTok, Instagram, Facebook and LinkedIn public links. Paste the link and the panel detects the platform automatically.</p>
           </details>
           <details className="faq-item">
             <summary>Do I need an account or an app?</summary>

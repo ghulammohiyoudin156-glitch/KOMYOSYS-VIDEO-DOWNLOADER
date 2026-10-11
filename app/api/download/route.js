@@ -182,6 +182,11 @@ const PLATFORM_PATTERNS = {
   instagram: /^(https?:\/\/)?(www\.)?(instagram\.com|instagr\.am)\/.+$/i,
   // Covers @user/video links plus the vm./vt. short links the share button produces.
   tiktok: /^(https?:\/\/)?((www|m|vm|vt)\.)?tiktok\.com\/.+$/i,
+  // Public post links (/posts/<slug>-<digits>-<4chars> and /feed/update/urn:li:activity:<digits>)
+  // plus the two-letter regional subdomains LinkedIn uses (uk.linkedin.com, de.linkedin.com, ...).
+  // The host is anchored, so look-alike domains such as notlinkedin.com or linkedin.com.evil.io
+  // are never detected as LinkedIn.
+  linkedin: /^(https?:\/\/)?((www|m|[a-z]{2})\.)?linkedin\.com\/.+$/i,
 };
 
 const ALLOWED_HOSTS = [
@@ -189,6 +194,7 @@ const ALLOWED_HOSTS = [
   'facebook.com', 'fb.watch', 'fb.com',
   'youtube.com', 'youtu.be', 'youtube-nocookie.com',
   'tiktok.com',
+  'linkedin.com',
 ];
 
 const isAllowedUrl = (value) => {
@@ -272,6 +278,21 @@ const isPhotoPostUrl = (value) => PHOTO_POST_PATTERN.test(value);
 // Reported up front so the user is told what the link actually is, instead of watching a job
 // run and then getting a raw "Unsupported URL" back from yt-dlp.
 const PHOTO_POST_MESSAGE = 'This is a TikTok photo post (a slideshow of images), not a video, so there is no video file to download. Open the post in TikTok and use "Save photo" to keep the individual images, or send a link to a post that has a video in it.';
+
+// The LinkedIn shapes the bundled yt-dlp extractor actually matches (verified against the
+// installed binary): a post slug ending in -<activity id>-<4 chars> - query strings such as
+// ?utm_source=share are fine because they sit outside the pattern - plus feed updates with
+// an activity or ugcPost URN. Every other LinkedIn page (profile /in/..., company pages,
+// jobs, Learning, /video/ links, text-only posts) has no downloadable video, so the shape
+// is checked before a job starts rather than after a progress bar that cannot succeed.
+const LINKEDIN_VIDEO_URL = /linkedin\.com\/(?:posts\/[^/?#]+-\d+-\w{4}|feed\/update\/urn:li:(?:activity|ugcPost):\d+)/i;
+// LinkedIn's "Copy link" sometimes hands over a share URN. A share and its activity carry
+// the same numeric id for the same public post, and the extractor only matches the activity
+// form, so the copy sent to yt-dlp is canonicalised. Nothing private is bypassed - the post
+// has to be publicly readable either way.
+const LINKEDIN_SHARE_URN = /urn:li:share:(\d+)/i;
+
+const LINKEDIN_NOT_VIDEO_MESSAGE = 'This LinkedIn link does not point to a downloadable video post. Paste the link of a post that actually contains a video - it looks like linkedin.com/posts/yourname_activity-... or linkedin.com/feed/update/urn:li:activity:... Profile pages, company pages, jobs and text-only posts have no video file to download.';
 
 // Instagram and Facebook refuse anonymous requests outright ("Instagram API is not granting
 // access", "Cannot parse data"), because those pages are only rendered for a logged-in
@@ -428,11 +449,11 @@ const runYtdlp = (job, args) => new Promise((resolve) => {
   });
   child.on('error', (error) => {
     clearTimeout(kill);
-    resolve({ ok: false, message: String(error.message || error) });
+    resolve({ ok: false, message: String(error.message || error), code: null });
   });
   child.on('close', (code) => {
     clearTimeout(kill);
-    resolve({ ok: code === 0, message: stderrLines.join('\n') });
+    resolve({ ok: code === 0, message: stderrLines.join('\n'), code });
   });
 });
 
@@ -569,7 +590,7 @@ export async function POST(request) {
 
     if (!platform) {
       return NextResponse.json(
-        { success: false, error: 'Invalid URL. Please provide a valid YouTube, TikTok, Facebook, or Instagram video URL.' },
+        { success: false, error: 'Invalid URL. Please provide a valid YouTube, TikTok, Facebook, Instagram, or LinkedIn video URL.' },
         { status: 400 }
       );
     }
@@ -589,6 +610,27 @@ export async function POST(request) {
       );
     }
 
+    // LinkedIn links are checked against the shapes the extractor can really process, and a
+    // share URN is rewritten to its canonical activity id (same public post, same number).
+    // The pasted URL itself is never modified - only the copy handed to yt-dlp.
+    let ytUrl = requestUrl;
+    if (platform === 'linkedin') {
+      ytUrl = requestUrl.replace(LINKEDIN_SHARE_URN, 'urn:li:activity:$1');
+      if (!LINKEDIN_VIDEO_URL.test(ytUrl)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: LINKEDIN_NOT_VIDEO_MESSAGE,
+            resources: [{ label: 'Open LinkedIn', url: 'https://www.linkedin.com/' }],
+          },
+          { status: 400 }
+        );
+      }
+      // One line per accepted job so a failed LinkedIn run can be traced in the server log
+      // without exposing anything beyond the public link and the chosen mode.
+      console.log(`[download] linkedin job accepted (${wantedMode} mode): ${trimmedUrl.slice(0, 160)}`);
+    }
+
     if (activeJobCount() >= MAX_ACTIVE_JOBS) {
       return NextResponse.json(
         { success: false, error: 'The server is already preparing other videos. Please wait for one to finish, then try again.' },
@@ -597,7 +639,7 @@ export async function POST(request) {
     }
 
     const job = createJob(platform, wantedMode);
-    void runJob(job, { requestUrl, platform, trimmedUrl, mode: wantedMode }).catch((error) => {
+    void runJob(job, { requestUrl: ytUrl, platform, trimmedUrl, mode: wantedMode }).catch((error) => {
       console.error('Download job failed unexpectedly:', error);
       failJob(job, 'The download could not be completed due to a server error. Please try again.', [], 500);
     });
@@ -650,6 +692,10 @@ const runJob = async (job, { requestUrl, platform, trimmedUrl, mode = 'video' })
     tiktok: ['TIKTOK_COOKIES_FILE', 'COOKIES_FILE'],
     instagram: ['INSTAGRAM_COOKIES_FILE', 'COOKIES_FILE'],
     facebook: ['FACEBOOK_COOKIES_FILE', 'COOKIES_FILE'],
+    // Public LinkedIn posts are readable anonymously, so no cookies are needed for them.
+    // The entry exists so a cookies.txt the operator already trusts for a signed-in session
+    // is honoured the same way as on the other platforms - nothing is hard-coded.
+    linkedin: ['LINKEDIN_COOKIES_FILE', 'COOKIES_FILE'],
   };
 
   let cookieFile = COOKIE_ENV_BY_PLATFORM[platform]
@@ -947,7 +993,12 @@ const CLIENT_REFUSAL = /sign in to confirm|confirm you'?re not a bot|429|too man
         { label: 'Request a copy of your own TikTok data', url: 'https://www.tiktok.com/settings/offline-data' },
         { label: 'Read the TikTok Terms of Service', url: 'https://www.tiktok.com/legal/page/row/terms-of-service/en' },
       ]
-      : [
+      : platform === 'linkedin'
+        ? [
+          { label: 'Open LinkedIn', url: 'https://www.linkedin.com/' },
+          { label: 'Read the LinkedIn user agreement', url: 'https://www.linkedin.com/legal/user-agreement' },
+        ]
+        : [
       { label: 'Use the official Download or Save feature', url: platform === 'facebook' ? 'https://www.facebook.com/' : 'https://www.instagram.com/' },
       { label: 'Request your account data export', url: 'https://accountscenter.facebook.com/info_and_permissions/dyi' },
       { label: 'Explore the official Graph APIs', url: 'https://developers.facebook.com/' },
@@ -999,7 +1050,16 @@ const sessionHint = browserWasUndecryptable
   const loginHint = providerNote || browserWasUndecryptable || browserWasLocked ? '' : LOGIN_HINT;
   const showSessionHint = !providerNote && !browserWasUndecryptable;
 
-  failJob(job, photoPost
+  // A LinkedIn failure is always reported with one clean sentence: the raw extractor
+  // message ("Unsupported URL", a login wall, a missing <video> tag) means nothing to a
+  // visitor and could leak internals, so the detail is kept in the server log only.
+  if (platform === 'linkedin' && providerError) {
+    console.warn(`[linkedin] download failed exit=${run?.code ?? 'n/a'} url=${trimmedUrl.slice(0, 160)} :: ${String(providerError).slice(0, 300)}`);
+  }
+
+  failJob(job, platform === 'linkedin'
+    ? 'Unable to download this LinkedIn video. Please make sure the post is publicly accessible and try again.'
+    : photoPost
     ? PHOTO_POST_MESSAGE
     : providerError
       ? `The video could not be downloaded: ${cleanReason(providerError)}${providerNote}${botChecked ? YOUTUBE_BOT_HINT : ''}${loginNeeded ? loginHint : ''}${showSessionHint ? sessionHint : ''}${platform === 'youtube' && ffmpegMissing ? FFMPEG_HINT : ''}${platform === 'tiktok' && needsTiktokHint(providerError) ? TIKTOK_HINT : ''}`

@@ -9,6 +9,9 @@ const PLATFORMS = {
   facebook: { regex: /^(https?:\/\/)?(www\.)?(facebook\.com|fb\.watch|fb\.com)\/.+$/i, name: 'Facebook' },
   instagram: { regex: /^(https?:\/\/)?(www\.)?(instagram\.com|instagr\.am)\/.+$/i, name: 'Instagram' },
   tiktok: { regex: /^(https?:\/\/)?((www|m|vm|vt)\.)?tiktok\.com\/.+$/i, name: 'TikTok' },
+  // Anchored on linkedin.com, so look-alike hosts (notlinkedin.com, linkedin.com.evil.io)
+  // are never detected as LinkedIn. Matches www/m and the regional subdomains.
+  linkedin: { regex: /^(https?:\/\/)?((www|m|[a-z]{2})\.)?linkedin\.com\/.+$/i, name: 'LinkedIn' },
 };
 
 const EXAMPLE_URLS = {
@@ -16,6 +19,7 @@ const EXAMPLE_URLS = {
   facebook: 'https://www.facebook.com/watch/?v=...',
   instagram: 'https://www.instagram.com/reel/...',
   tiktok: 'https://www.tiktok.com/@username/video/...',
+  linkedin: 'https://www.linkedin.com/posts/username_activity-XXXXXXXXXXXXXXXX-AbCd',
 };
 
 // What the visitor wants out of the link. `video` is the default so the panel behaves
