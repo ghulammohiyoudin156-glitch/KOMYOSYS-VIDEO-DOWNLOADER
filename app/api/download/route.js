@@ -186,7 +186,7 @@ const PLATFORM_PATTERNS = {
   // plus the two-letter regional subdomains LinkedIn uses (uk.linkedin.com, de.linkedin.com, ...).
   // The host is anchored, so look-alike domains such as notlinkedin.com or linkedin.com.evil.io
   // are never detected as LinkedIn.
-  linkedin: /^(https?:\/\/)?((www|m|[a-z]{2})\.)?linkedin\.com\/.+$/i,
+  linkedin: /^(https?:\/\/)?(((www|m|[a-z]{2})\.)?linkedin\.com|lnkd\.in)\/.+$/i,
 };
 
 const ALLOWED_HOSTS = [
@@ -195,6 +195,7 @@ const ALLOWED_HOSTS = [
   'youtube.com', 'youtu.be', 'youtube-nocookie.com',
   'tiktok.com',
   'linkedin.com',
+  'lnkd.in',
 ];
 
 const isAllowedUrl = (value) => {
@@ -616,7 +617,7 @@ export async function POST(request) {
     let ytUrl = requestUrl;
     if (platform === 'linkedin') {
       ytUrl = requestUrl.replace(LINKEDIN_SHARE_URN, 'urn:li:activity:$1');
-      if (!LINKEDIN_VIDEO_URL.test(ytUrl)) {
+      if (!/^https?:\/\/(?:www\.)?lnkd\.in\//i.test(ytUrl) && !LINKEDIN_VIDEO_URL.test(ytUrl)) {
         return NextResponse.json(
           {
             success: false,
@@ -1175,3 +1176,5 @@ export async function GET(request) {
     },
   });
 }
+
+

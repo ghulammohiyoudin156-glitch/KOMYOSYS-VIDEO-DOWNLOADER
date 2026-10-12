@@ -11,7 +11,7 @@ const PLATFORMS = {
   tiktok: { regex: /^(https?:\/\/)?((www|m|vm|vt)\.)?tiktok\.com\/.+$/i, name: 'TikTok' },
   // Anchored on linkedin.com, so look-alike hosts (notlinkedin.com, linkedin.com.evil.io)
   // are never detected as LinkedIn. Matches www/m and the regional subdomains.
-  linkedin: { regex: /^(https?:\/\/)?((www|m|[a-z]{2})\.)?linkedin\.com\/.+$/i, name: 'LinkedIn' },
+  linkedin: { regex: /^(https?:\/\/)?(((www|m|[a-z]{2})\.)?linkedin\.com|lnkd\.in)\/.+$/i, name: 'LinkedIn' },
 };
 
 const EXAMPLE_URLS = {
@@ -403,4 +403,5 @@ export default function Downloader() {
       <p className="panel-footnote">Only download content you own or are authorized to save.</p>
     </div>
   );
-}
+ }
+
